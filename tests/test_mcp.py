@@ -27,6 +27,21 @@ class MCPTest(unittest.TestCase):
         self.addCleanup(viewer_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        # A terminal state/receipt can precede wrapper exit. Close its log handles before
+        # TemporaryDirectory cleanup, especially on Windows/Python 3.9.
+        children = []
+        spawn_original = runtime.spawn
+        def capture_spawn(*args, **kwargs):
+            child = spawn_original(*args, **kwargs)
+            children.append(child)
+            return child
+        def wait_for_children():
+            for child in children:
+                child.wait(timeout=10)
+        self.addCleanup(wait_for_children)
+        spawn_patch = mock.patch.object(runtime, 'spawn', side_effect=capture_spawn)
+        spawn_patch.start()
+        self.addCleanup(spawn_patch.stop)
         self.base = Path(self.temp.name)
         self.workspace = self.base / '中文 workspace'
         self.workspace.mkdir()
@@ -98,6 +113,21 @@ class MCPTest(unittest.TestCase):
         files = sorted((self.state / 'tasks/one').glob('*/prompt.txt'))
         self.assertEqual({p.read_text() for p in files}, {'Do one thing','Rework exactly this'})
         self.assertNotEqual(first['dispatch_id'], second['dispatch_id'])
+
+    def test_continuation_keeps_resolved_route_after_default_changes(self):
+        # The fake executable exports this route; the second configured default must not be read.
+        route = 'opencode-go/deepseek-v4.1-flash'
+        with mock.patch.object(runtime, 'DEFAULT_MODEL', None), \
+             mock.patch.object(runtime, 'opencode_default_model', return_value=route) as configured:
+            first = mcp_server._call_tool('oc_run', self.args())
+            self.assertEqual(first['model_source'], 'opencode-config')
+            self.assertEqual(self.finish('one')['state'], 'completed')
+            configured.return_value = 'different-provider/different-model'
+            second = mcp_server._call_tool('oc_continue', {'task':'one', 'prompt':'Rework', 'watch':False})
+            self.assertEqual(second['model'], route)
+            self.assertEqual(second['model_source'], 'recorded')
+            self.assertEqual(self.finish('one')['state'], 'completed')
+            self.assertEqual(configured.call_count, 1)
 
     def test_executor_rejection_is_not_reported_as_accepted(self):
         # Preflight passes; a direct CLI writer acquired the authoritative lock first.

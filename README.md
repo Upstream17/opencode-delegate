@@ -11,10 +11,13 @@ dispatches it, watches progress and reviews the evidence; the worker does the wo
 
 ## Why
 
-Open-weight routes such as `opencode-go/deepseek-v4.1-flash` come with a very large token allowance and
-a 1,000,000-token context window, and they accept images. A typical delegated session measures a few
-thousand tokens on the worker side, so the expensive frontier model is billed only for the parts that
-actually need it: framing the task, judging the result, and integrating it.
+Open-source model services often provide generous token allowances for execution work such as
+reading files, writing code, organizing material, and running tests. The parent agent scopes the
+task, reviews evidence, and integrates results, reserving premium quota for important decisions.
+Actual allowance, pricing, and capability depend on your provider and are not guaranteed by this tool.
+
+No model brand is preferred or required. The worker follows your OpenCode configuration by default,
+and the parent can select a model per task.
 
 ## Requirements
 
@@ -22,101 +25,92 @@ actually need it: framing the task, judging the result, and integrating it.
 |---|---|
 | Python | 3.9 or newer (developed and tested on 3.12). **No third-party packages** — standard library only. |
 | OpenCode CLI | Tested with 2.0.26. Must be installed and paired on the machine. |
-| A model route | Whatever OpenCode is already configured with. Recommended: `opencode-go/deepseek-v4.1-flash`, which needs an OpenCode Go subscription. |
+| A model route | Whatever OpenCode is already configured with. No specific brand, subscription, or provider is required. |
 | OS | Windows 10/11 for the full feature set. See [support matrix](#support-matrix). |
 
 ## Install
 
-### 1. Get the code (source install only; skip this for npm)
+You need Node.js 16+, Python 3.9+, and an OpenCode installation that can already use a model.
+The launcher discovers Python automatically; it does not install Python, purchase a subscription,
+or edit your OpenCode configuration.
 
-```powershell
-git clone https://github.com/Upstream17/opencode-delegate.git "$env:USERPROFILE\.codex\skills\opencode-delegate"
+### Recommended: one npm install command
+
+```bash
+npm install -g --allow-git=all github:Upstream17/opencode-delegate
 ```
 
-Any directory works. Nothing in the runtime path hardcodes a user name or machine path: the scripts
-resolve their own location from `__file__`, the state root defaults to `$CODEX_HOME/opencode-delegate/state`
-(falling back to `~/.opencode-delegate/state`), and the OpenCode executable is discovered at run time.
+This installs from the public GitHub repository without a manual clone. The package is **not yet
+published to the npm registry**, so `npm install -g opencode-delegate` is not available yet. That
+short command becomes available after publication. GitHub-source installs may require Git.
 
-### 2. Register the MCP server
+`--allow-git=all` explicitly permits Git sources for this invocation because npm 12 disables them
+by default; it does not change global npm settings. Older npm versions that do not recognize this
+option can omit it.
 
-Two variants. **A** names no paths at all; **B** runs this checkout directly.
+### Add the server to your MCP client
 
-**A. Through the npm launcher (no paths, nothing to escape)**
-
-The bundled `bin/opencode-delegate.js` locates Python 3.9+ and hands it `mcp_server.py`. Clients
-using a `mcpServers` configuration can register it as follows; other clients use their own schema:
+Installing a tool and registering it with an agent are separate steps. For clients using
+`mcpServers`, such as Claude Desktop and Claude Code, add:
 
 ```json
 {
   "mcpServers": {
-    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate@0.4.1"] }
+    "opencode_delegate": { "command": "opencode-delegate", "args": [] }
   }
 }
 ```
 
-Python 3.9+ still has to be on the machine; the launcher probes `py -3`, `python` and `python3` and
-honours `OC_DELEGATE_PYTHON`. Before this is published to npm you can point at the repository instead:
-`"args": ["-y", "github:Upstream17/opencode-delegate"]`.
-
-**B. Directly from the checkout (absolute paths)**
-
-The only machine-specific piece. **Use absolute paths** to a Python interpreter and to `mcp_server.py`.
-
-Codex — `~/.codex/config.toml`:
+For Codex, add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.opencode_delegate]
-command = 'C:\Path\To\python.exe'
-args = ['C:\Path\To\opencode-delegate\mcp_server.py']
+command = 'opencode-delegate'
+args = []
 ```
 
-> **Windows + TOML:** write paths as TOML *literal* strings in single quotes, or double every backslash.
-A single `\P` inside a basic double-quoted string is an invalid escape and will break config parsing
-entirely. Validate with `python -c "import tomllib,pathlib;tomllib.loads(pathlib.Path('config.toml').read_text('utf-8'))"`
-before restarting.
+Restart the client. The default model comes from OpenCode's current configuration; you do not
+need to choose it again in the MCP settings.
 
-Many clients, including Claude Desktop and Claude Code, use the following `mcpServers` shape.
-The configuration filename and schema depend on the client; it is not universal:
+<details>
+<summary>Skip the global install: let the client download and run with npx</summary>
+
+Replace the command and arguments above with:
 
 ```json
-{
-  "mcpServers": {
-    "opencode_delegate": {
-      "command": "C:\\Path\\To\\python.exe",
-      "args": ["C:\\Path\\To\\opencode-delegate\\mcp_server.py"]
-    }
-  }
-}
+{ "command": "npx", "args": ["--allow-git=all", "-y", "github:Upstream17/opencode-delegate"] }
 ```
 
-For Zed, use `context_servers` in its settings instead:
+This is a stdio server: waiting for MCP requests after launch is normal. Usually the MCP client
+starts it, rather than a person keeping an interactive terminal open.
+</details>
 
-```json
-{
-  "context_servers": {
-    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate@0.4.1"] }
-  }
-}
+<details>
+<summary>Other clients and Windows startup troubleshooting</summary>
+
+Zed uses `context_servers` in its settings, with the same command and arguments. Configuration
+locations differ by client; follow that client's MCP schema.
+
+If a Windows client cannot find the global command, restart it to refresh PATH. If it cannot execute
+npm's `.cmd` shim, run `npm root -g` to find the package location, then configure `node.exe` with
+`<npm-global-directory>/opencode-delegate/bin/opencode-delegate.js` as its argument. This is a
+compatibility fallback for certain clients, not a prerequisite for every installation.
+</details>
+
+<details>
+<summary>Source install and optional skill (developers)</summary>
+
+```bash
+git clone https://github.com/Upstream17/opencode-delegate.git
 ```
 
-For Codex using npm, the TOML block is:
+Set your client's command to a Python interpreter and its argument to the absolute path of
+`mcp_server.py` in the checkout. For Windows TOML paths, use single-quoted literal strings.
 
-```toml
-[mcp_servers.opencode_delegate]
-command = 'npx'
-args = ['-y', 'opencode-delegate@0.4.1']
-```
-
-On Windows, clients that cannot execute the `npx.cmd` shim directly can use the absolute path to
-`node.exe` and the installed package's `bin/opencode-delegate.js` as its argument. Do not add a shell
-unless the client specifically requires one. Restart the client after editing its config.
-
-### 3. Optional: install as a skill
-
-`SKILL.md` follows the portable skill format (`name` + `description` frontmatter), so agents that read
-skill directories can use this folder in place. To install it, copy or clone the directory into your
-agent's skill root — for example `~/.codex/skills/opencode-delegate` or `~/.claude/skills/opencode-delegate`.
-The MCP server and the skill are independent: you can use either one alone.
+Agents that support skill directories can also place the checkout in their skill root. The MCP
+server and skill can be used independently. State/logs live in the user directory; the installation
+directory does not need to be writable. See environment variables below.
+</details>
 
 ## Quick start
 
@@ -151,36 +145,24 @@ Read `oc_status` / `oc_result` and inspect the evidence yourself.
 
 ## Choosing a model
 
-Nothing is pinned by default. With no `model`, the worker runs on whichever model your OpenCode
-configuration selects, and the turn records the route that was actually used:
+New-task precedence:
 
-```jsonc
-"verification": { "status": "adopted", "providerID": "opencode-go", "id": "deepseek-v4.1-flash" }
-```
+1. The parent's explicit `oc_run.model`.
+2. The MCP environment's `OC_DELEGATE_MODEL`.
+3. OpenCode's current default in the task workspace, read anew for every new task.
+4. If none is available, omit the model argument and record the route OpenCode actually selects.
 
-Pass `model` on `oc_run` to pin one per task, or set `OC_DELEGATE_MODEL` to change the default for
-every task. A pinned task keeps its route: `oc_continue` and `oc_recover` inherit it, and passing a
-different model is rejected rather than silently swapping it. `verification.status` is `verified` when
-a requested route matched the export, `adopted` when no route was requested, and `mismatch`,
-`inconsistent` or `unverifiable` when the evidence did not support the run — those flag the turn for
-review.
+Reading configuration never edits it. An unsupported/failed config query falls back to letting
+OpenCode choose. A resolved default is recorded as this task's fixed route; changing OpenCode's
+default affects new tasks only. `oc_continue` / `oc_recover` reuse the recorded task route rather
+than resolving a new default. Historical unpinned tasks remain unpinned.
 
-**Unpinned tasks inherit OpenCode's own default.** A task that names no model reads the default
-model from OpenCode's resolved configuration, so setting that default once (however you prefer to
-set it in OpenCode) configures both the TUI and every delegated task, with nothing to configure
-here. If no default is configured anywhere, OpenCode chooses for itself.
-
-**That default still has to be usable.** If a run fails with a provider/authentication
-error, check the chosen route, login, subscription and endpoint availability. A 403 alone does not
-prove that the default model is missing. Configure a model you can access, for example by merging
-the following field into your existing OpenCode config (preserve other settings):
-
-```jsonc
-"model": "opencode-go/deepseek-v4.1-flash"
-```
-
-Alternatively, set `OC_DELEGATE_MODEL` to pin the default only for this MCP server. The installer and
-launcher never edit your OpenCode configuration or silently switch providers.
+The `oc_run` response's `model_source` identifies the source. Pinned routes are `verified` against
+exported evidence; completely unpinned runs `adopt` a valid recorded route (`status: adopted`).
+Missing, inconsistent, or mismatched routes require review. A provider/authentication error should
+prompt checks of the actual route, credentials and access; a 403 does not prove the default is absent.
+The tool never silently switches providers or changes OpenCode settings. `provider/model-name` is
+only a format placeholder, not an installable model ID.
 
 ## Environment variables
 

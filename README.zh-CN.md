@@ -11,9 +11,11 @@ Claude Code、Claude Desktop、Cursor、Cline、Continue、Zed、Windsurf。主�
 
 ## 为什么
 
-像 `opencode-go/deepseek-v4.1-flash` 这样的开源权重路由，token 额度非常充裕，上下文窗口
-1,000,000 token，并且支持识图。一次典型的委派任务在子智能体侧通常只跑几千 token，所以付费模型只为
-真正需要它的部分结算。
+开源模型方案通常提供较充裕的 token 额度，适合承担读文件、编写代码、整理材料和运行测试等执行工作。
+主代理负责明确需求、审阅证据和集成结果，把较贵的额度留给关键判断。实际额度、价格和能力取决于
+你选择的服务，不由本工具保证。
+
+本工具不绑定任何模型品牌。默认跟随 OpenCode 的配置，也允许父代理为每个任务指定模型。
 
 ## 前置要求
 
@@ -21,98 +23,86 @@ Claude Code、Claude Desktop、Cursor、Cline、Continue、Zed、Windsurf。主�
 |---|---|
 | Python | 3.9 或更高（在 3.12 上开发与测试）。**无任何第三方依赖**，只用标准库。 |
 | OpenCode CLI | 在 2.0.26 上测试过。需已安装并完成配对。 |
-| 模型路由 | 用你 OpenCode 里已经配好的那个。推荐 `opencode-go/deepseek-v4.1-flash`，需要 OpenCode Go 订阅。 |
+| 模型路由 | 用你 OpenCode 里已经配好的那个。不限定品牌、订阅或 provider。 |
 | 操作系统 | 完整功能需要 Windows 10/11，见下方支持矩阵。 |
 
 ## 安装
 
-### 1. 获取代码（仅源码安装需要；npm 安装跳过这一步）
+需要 Node.js 16+、Python 3.9+，以及已能正常调用模型的 OpenCode。启动器会自动查找 Python；
+它不会替你安装 Python、购买模型订阅或修改 OpenCode 配置。
 
-```powershell
-git clone https://github.com/Upstream17/opencode-delegate.git "$env:USERPROFILE\.codex\skills\opencode-delegate"
+### 推荐：一条 npm 命令安装
+
+```bash
+npm install -g --allow-git=all github:Upstream17/opencode-delegate
 ```
 
-放在哪个目录都可以。运行时路径里没有任何硬编码的用户名或机器路径：脚本用 `__file__` 解析自身位置，
-状态根目录默认是 `$CODEX_HOME/opencode-delegate/state`（没有则退回 `~/.opencode-delegate/state`），
-OpenCode 可执行文件在运行时动态探测。
+这会直接从公开 GitHub 仓库安装，无需手动 clone。当前尚未发布到 npm registry，所以暂时不要使用
+`npm install -g opencode-delegate`；正式发布后才可改用这个短命令。GitHub 来源安装可能需要 Git。
 
-### 2. 注册 MCP 服务
+npm 12 默认禁止 Git 来源，`--allow-git=all` 为本次安装显式放行，不修改全局 npm 设置。
+不识别该选项的旧版 npm 可以省略它。
 
-两种方式。**A** 完全不写路径；**B** 直接跑这份检出。
+### 将服务添加到 MCP 客户端
 
-**A. 走 npm 启动器（无路径、无需转义）**
-
-自带的 `bin/opencode-delegate.js` 会探测 Python 3.9+ 并把 `mcp_server.py` 交给它。使用 `mcpServers`
-配置结构的客户端可以这样注册；其他客户端按自身格式配置：
+安装与注册是两件事：npm 安装工具，客户端配置决定哪个智能体可以调用它。
+Claude Desktop、Claude Code 等使用 `mcpServers` 的客户端添加：
 
 ```json
 {
   "mcpServers": {
-    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate@0.4.1"] }
+    "opencode_delegate": { "command": "opencode-delegate", "args": [] }
   }
 }
 ```
 
-机器上仍然需要 Python 3.9+；启动器会依次探测 `py -3`、`python`、`python3`，并认 `OC_DELEGATE_PYTHON`。
-在发布到 npm 之前，可以直接指向仓库：`"args": ["-y", "github:Upstream17/opencode-delegate"]`。
-
-**B. 直接从检出运行（绝对路径）**
-
-这是唯一一处与机器相关的地方，**必须使用绝对路径**指向 Python 解释器和 `mcp_server.py`。
-
-Codex —— `~/.codex/config.toml`：
+Codex 在 `~/.codex/config.toml` 中添加：
 
 ```toml
 [mcp_servers.opencode_delegate]
-command = 'C:\Path\To\python.exe'
-args = ['C:\Path\To\opencode-delegate\mcp_server.py']
+command = 'opencode-delegate'
+args = []
 ```
 
-> **Windows + TOML：** 路径一律写成单引号的字面量字符串，或者把每个反斜杠写成双反斜杠。双引号基本
-字符串里的一个 `\P` 就是非法转义，会让配置直接解析失败（Codex 会卡在启动界面）。改动前先校验：
-> `python -c "import tomllib,pathlib;tomllib.loads(pathlib.Path('config.toml').read_text('utf-8'))"`
+保存后重启客户端。模型默认沿用 OpenCode 当前配置，无需在 MCP 中重复选择。
 
-Claude Desktop、Claude Code 等客户端使用下面的 `mcpServers` 结构。配置文件的位置和格式因客户端而异，不能一概而论：
+<details>
+<summary>不想全局安装：让客户端通过 npx 自动下载并启动</summary>
+
+把上面的命令换成：
 
 ```json
-{
-  "mcpServers": {
-    "opencode_delegate": {
-      "command": "C:\\Path\\To\\python.exe",
-      "args": ["C:\\Path\\To\\opencode-delegate\\mcp_server.py"]
-    }
-  }
-}
+{ "command": "npx", "args": ["--allow-git=all", "-y", "github:Upstream17/opencode-delegate"] }
 ```
 
-Zed 应在设置里使用 `context_servers`：
+这是 stdio 服务，启动后等待 MCP 请求是正常行为；通常应由客户端启动，而非手工守着终端。
+</details>
 
-```json
-{
-  "context_servers": {
-    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate@0.4.1"] }
-  }
-}
+<details>
+<summary>其他客户端与 Windows 启动问题</summary>
+
+Zed 在设置中使用 `context_servers`，里面的 `command` 和 `args` 同上。
+各客户端的设置位置不同，请使用其官方 MCP 配置格式。
+
+若 Windows 客户端找不到全局命令，先重启客户端，让它读取更新后的 PATH。
+若客户端不能直接执行 npm 的 `.cmd` 启动脚本，可执行 `npm root -g` 找到安装目录，
+改用 `node.exe` 启动 `<npm全局目录>/opencode-delegate/bin/opencode-delegate.js`。
+这只是部分 Windows 客户端需要的兼容方式，并非默认安装步骤。
+</details>
+
+<details>
+<summary>源码安装与可选 skill（开发者）</summary>
+
+```bash
+git clone https://github.com/Upstream17/opencode-delegate.git
 ```
 
-Codex 走 npm 时使用 TOML：
+把客户端 `command` 设为 Python 解释器，`args` 设为检出目录中 `mcp_server.py` 的绝对路径。
+Windows TOML 路径使用单引号字面量字符串，避免反斜杠转义错误。
 
-```toml
-[mcp_servers.opencode_delegate]
-command = 'npx'
-args = ['-y', 'opencode-delegate@0.4.1']
-```
-
-Windows 上若客户端不能直接执行 `npx.cmd`，可以将 `command` 设为 `node.exe` 的绝对路径，
-并在 `args` 里填写已安装包的 `bin/opencode-delegate.js` 路径。按客户端自身规则注册，不默认添加 shell。
-改完配置后重启客户端。
-
-### 3. 可选：作为 skill 安装
-
-`SKILL.md` 用的是通用 skill 格式（`name` + `description` 前置元数据），支持 skill 目录的智能体可以
-直接就地使用这个文件夹。要安装就把目录复制或克隆到对应 skill 根目录，例如
-`~/.codex/skills/opencode-delegate` 或 `~/.claude/skills/opencode-delegate`。
-MCP 服务和 skill 两者相互独立，只用其中一个也能工作。
+支持 skill 目录的智能体还可以把仓库放入自己的 skill 根目录。MCP 与 skill 可分别使用。
+状态、日志保存在用户目录中，安装目录无需写入；环境变量见后文。
+</details>
 
 ## 快速开始
 
@@ -147,31 +137,24 @@ oc_continue{task: "fix-flaky-test", prompt: "<返工要求>"}          # 只用�
 
 ## 选择模型
 
-默认不钉任何模型。不传 `model` 时，子智能体跑在你 OpenCode 自己配置的模型上，任务记录会写下实际使用的路由：
+新任务的优先级是：
 
-```jsonc
-"verification": { "status": "adopted", "providerID": "opencode-go", "id": "deepseek-v4.1-flash" }
-```
+1. 父代理在 `oc_run` 中指定的 `model`。
+2. MCP 环境变量 `OC_DELEGATE_MODEL`。
+3. 当前任务目录下 OpenCode 的默认模型配置（每个新任务重新读取）。
+4. 都没有时，不传模型参数，由 OpenCode 自行选择，并记录实际路由。
 
-在 `oc_run` 上传 `model` 可以为单个任务钉定模型；设 `OC_DELEGATE_MODEL` 可以改所有任务的默认值。已钉定的任务
-会保持自己的路由：`oc_continue` 与 `oc_recover` 自动继承，传一个不一样的模型会被拒绝，而不是被静默换掉。
-`verification.status` 为 `verified` 表示请求的路由与导出结果一致，`adopted` 表示没有请求路由、直接采纳实际
-结果，而 `mismatch` / `inconsistent` / `unverifiable` 表示证据不支持这次运行——这几种会把该轮标记为待审阅。
+读取 OpenCode 配置不修改任何文件。读取失败或 CLI 不支持该查询时，会交回 OpenCode 选择。
+解析到的默认模型会作为本任务的固定路由保存；以后修改 OpenCode 默认值只影响新任务。
+`oc_continue` / `oc_recover` 沿用该任务记录，不会重新读取默认值或静默换模型。
+历史上未固定模型的任务仍保持未固定，由 OpenCode 处理该会话。
 
-**不钉模型的任务会自动继承 OpenCode 自身的默认模型。** 它会读取 OpenCode 解析后的配置里的默认模型，
-所以只要在 OpenCode 里设过一次默认模型，TUI 和所有被委派的任务就都跟着用同一个，这里不需要任何配置。
-如果哪里都没设默认值，则由 OpenCode 自行选择。
+`oc_run` 返回的 `model_source` 说明来源。固定路由的校验结果为 `verified`；完全未指定路由时，
+会采纳导出证据中的有效路由，结果为 `adopted`。缺失、混用或不匹配的路由会标记为待审阅。
 
-**但这个默认模型本身必须可用。** 如果遇到 provider/auth 错误，请检查
-实际选择的模型、登录凭据、订阅权限与端点。403 并不一定意味着缺少默认模型。可以将自己有权限
-使用的模型合并进现有 OpenCode 配置，保留其他字段，例如：
-
-```jsonc
-"model": "opencode-go/deepseek-v4.1-flash"
-```
-
-也可设 `OC_DELEGATE_MODEL`，仅给本 MCP 钉定默认模型。安装器和启动器不会修改 OpenCode 配置，
-也不会在失败后静默切换 provider。
+如出现 provider/auth 错误，应检查实际路由、登录与使用权限；403 不一定表示缺少默认模型。
+本工具不会自动切换服务商或修改你的 OpenCode 设置。本文中的 `provider/model-name` 仅为格式占位，
+需要显式选择时请使用 OpenCode 中真实可用的模型 ID。
 
 ## 环境变量
 
