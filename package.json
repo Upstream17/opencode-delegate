@@ -1,6 +1,6 @@
 {
   "name": "opencode-delegate",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Delegate bounded tasks from any MCP client to a local OpenCode worker, so premium model quota is spent on scoping and review instead of execution.",
   "license": "MIT",
   "author": "Upstream17",
@@ -8,10 +8,13 @@
     "opencode-delegate": "bin/opencode-delegate.js"
   },
   "files": [
-    "bin/",
-    "bridge/",
-    "references/",
-    "scripts/",
+    "bin/opencode-delegate.js",
+    "bridge/package.json",
+    "bridge/tui.ts",
+    "references/operations.md",
+    "scripts/delegate.py",
+    "scripts/runtime.py",
+    "agents/openai.yaml",
     "mcp_server.py",
     "mcp_probe.py",
     "SKILL.md",
@@ -21,6 +24,9 @@
   ],
   "engines": {
     "node": ">=16"
+  },
+  "scripts": {
+    "test": "node tests/test_launcher.cjs"
   },
   "keywords": [
     "mcp",

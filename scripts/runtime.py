@@ -44,7 +44,8 @@ STATE_ROOT = _default_state_root()
 # selects, and the verification adopts the route that was actually used. Set OC_DELEGATE_MODEL to
 # force a default, or pass model per task.
 DEFAULT_MODEL = os.environ.get('OC_DELEGATE_MODEL') or None
-WATCH_DEFAULT = os.environ.get('OC_DELEGATE_WATCH', '1').lower() not in ('0', 'false', 'no')
+VIEWER_SUPPORTED = sys.platform == 'win32'
+WATCH_DEFAULT = VIEWER_SUPPORTED and os.environ.get('OC_DELEGATE_WATCH', '1').lower() not in ('0', 'false', 'no')
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
@@ -197,6 +198,8 @@ def switch_tab(record, bridge, session_id, timeout=8):
 
 
 def watch(task, force=False):
+    if not VIEWER_SUPPORTED:
+        raise RuntimeError('TUI viewer is supported only on Windows; use oc_status/oc_wait/oc_result on this platform')
     state = read_state(task)
     workspace = state['workspace']
     session_id = state.get('session_id')
@@ -285,7 +288,7 @@ def spawn(action, task, workspace, model, prompt_file, startup, dispatch_id, ses
     # Close parent handles after spawn; each dispatch has its own immutable prompt and logs.
     with (logs / (dispatch_id + '.out.log')).open('wb') as out, (logs / (dispatch_id + '.err.log')).open('wb') as err:
         return reap_later(subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True, env=child_env(),
-                                creationflags=creationflags))
+                                creationflags=creationflags, start_new_session=os.name != 'nt'))
 
 
 def dispatch(action, args):
@@ -348,11 +351,13 @@ def dispatch(action, args):
     result = {**receipt, 'session_id': session_id, 'model': model, 'startup_path': str(startup)}
     if args.get('watch', WATCH_DEFAULT):
         try:
+            if not VIEWER_SUPPORTED:
+                watch(task)  # Fail before waiting for activity on a platform with no viewer.
             wait_for_session(task, proc, float(os.environ.get('OC_DELEGATE_SESSION_WAIT', '20')))
             result['watch'] = watch(task)
         except Exception as exc:
             # A cosmetic viewer failure must never make an accepted task look rejected.
-            result['watch'] = {'ok': False, 'error': str(exc), 'retry': 'oc_watch'}
+            result['watch'] = {'ok': False, 'error': str(exc), 'retry': 'oc_watch' if VIEWER_SUPPORTED else None}
     return result
 
 

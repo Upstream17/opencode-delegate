@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import shutil
 import subprocess
 import sys
@@ -239,7 +240,13 @@ def kill_tree(process: subprocess.Popen) -> None:
             subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
                            capture_output=True, timeout=30, creationflags=NO_WINDOW)
         else:
-            process.kill()
+            if getattr(process, '_delegate_process_group', False):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.kill()
     except Exception:
         try:
             process.kill()
@@ -302,7 +309,9 @@ class StreamRunner:
         process = subprocess.Popen(
             self.command, cwd=self.cwd, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            encoding="utf-8", errors="replace", bufsize=1, creationflags=NO_WINDOW)
+            encoding="utf-8", errors="replace", bufsize=1, creationflags=NO_WINDOW,
+            start_new_session=os.name != 'nt')
+        process._delegate_process_group = os.name != 'nt'
         self.child_pid = process.pid
         out_thread = threading.Thread(target=self._pump, args=(process.stdout, self.on_stdout_line), daemon=True)
         err_thread = threading.Thread(target=self._pump, args=(process.stderr, self.on_stderr_line), daemon=True)
@@ -407,6 +416,22 @@ def summarize_error(raw: object) -> dict:
 
 def run_blocking(command: list, cwd: str, timeout: float) -> tuple:
     """Run a short command to completion, returning (code, stdout, stderr, timed_out)."""
+    if os.name != 'nt':
+        with subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              encoding='utf-8', errors='replace', start_new_session=True) as process:
+            process._delegate_process_group = True
+            try:
+                output, error = process.communicate(timeout=timeout)
+                return process.returncode, output, error, False
+            except subprocess.TimeoutExpired:
+                kill_tree(process)
+                output, error = process.communicate()
+                return -1, output, error, True
+            except BaseException:
+                kill_tree(process)
+                process.communicate()
+                raise
     try:
         result = subprocess.run(command, cwd=cwd, stdin=subprocess.DEVNULL,
                                 capture_output=True, encoding="utf-8", errors="replace",
@@ -435,7 +460,14 @@ def verify_model(prefix: list, backend: dict, session_id: str, workspace: str,
         return {"status": "error", "message": f"export was not JSON: {exc}"}, None
     if not isinstance(data, dict):
         return {"status": "error", "message": "export was not a JSON object"}, None
-    routes = [message["model"] for message in data.get("messages", []) if message.get("model")]
+    messages = data.get('messages')
+    if not isinstance(messages, list) or any(not isinstance(message, dict) for message in messages):
+        return {'status': 'unverifiable', 'message': 'export messages were malformed'}, None
+    routes = [message['model'] for message in messages if message.get('model') is not None]
+    if any(not isinstance(route, dict) or any(
+            not isinstance(route.get(key), str) or not route[key].strip()
+            for key in ('providerID', 'id')) for route in routes):
+        return {'status': 'unverifiable', 'message': 'export recorded an incomplete model route'}, None
     sample = [{"providerID": route.get("providerID"), "id": route.get("id")} for route in routes[:3]]
     if requested:
         expected_provider, _, rest = requested.partition("/")

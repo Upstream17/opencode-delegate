@@ -21,6 +21,10 @@ import delegate
 
 class MCPTest(unittest.TestCase):
     def setUp(self):
+        # Viewer lifecycle cases below mock the Windows implementation on every CI host.
+        viewer_patch = mock.patch.object(runtime, 'VIEWER_SUPPORTED', True)
+        viewer_patch.start()
+        self.addCleanup(viewer_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -126,6 +130,16 @@ class MCPTest(unittest.TestCase):
         self.assertTrue(response['accepted'])
         self.assertFalse(response['watch']['ok'])
         self.assertEqual(self.finish('one')['state'], 'completed')
+
+    def test_explicit_unsupported_watch_does_not_wait_or_spawn_viewer(self):
+        with mock.patch.object(runtime, 'VIEWER_SUPPORTED', False), \
+             mock.patch.object(runtime, 'wait_for_session') as wait:
+            response = mcp_server._call_tool('oc_run', self.args() | {'watch': True})
+        self.assertTrue(response['accepted'])
+        self.assertFalse(response['watch']['ok'])
+        self.assertIsNone(response['watch']['retry'])
+        wait.assert_not_called()
+        self.finish('one')
 
     def test_two_concurrent_dispatches_one_wins_without_prompt_overwrite(self):
         outputs = []

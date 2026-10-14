@@ -26,10 +26,10 @@ Claude Code、Claude Desktop、Cursor、Cline、Continue、Zed、Windsurf。主�
 
 ## 安装
 
-### 1. 获取代码
+### 1. 获取代码（仅源码安装需要；npm 安装跳过这一步）
 
 ```powershell
-git clone https://github.com/<you>/opencode-delegate.git "$env:USERPROFILE\.codex\skills\opencode-delegate"
+git clone https://github.com/Upstream17/opencode-delegate.git "$env:USERPROFILE\.codex\skills\opencode-delegate"
 ```
 
 放在哪个目录都可以。运行时路径里没有任何硬编码的用户名或机器路径：脚本用 `__file__` 解析自身位置，
@@ -42,13 +42,13 @@ OpenCode 可执行文件在运行时动态探测。
 
 **A. 走 npm 启动器（无路径、无需转义）**
 
-自带的 `bin/opencode-delegate.js` 会找到 Python 3 解释器并把 `mcp_server.py` 交给它，所有 MCP 客户端
-注册方式都一样：
+自带的 `bin/opencode-delegate.js` 会探测 Python 3.9+ 并把 `mcp_server.py` 交给它。使用 `mcpServers`
+配置结构的客户端可以这样注册；其他客户端按自身格式配置：
 
 ```json
 {
   "mcpServers": {
-    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate"] }
+    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate@0.4.1"] }
   }
 }
 ```
@@ -72,8 +72,7 @@ args = ['C:\Path\To\opencode-delegate\mcp_server.py']
 字符串里的一个 `\P` 就是非法转义，会让配置直接解析失败（Codex 会卡在启动界面）。改动前先校验：
 > `python -c "import tomllib,pathlib;tomllib.loads(pathlib.Path('config.toml').read_text('utf-8'))"`
 
-其他 MCP 客户端都用标准 JSON 写法 —— Claude Desktop（`claude_desktop_config.json`）、
-Claude Code（`.mcp.json`）、Cursor、Cline、Continue、Zed：
+Claude Desktop、Claude Code 等客户端使用下面的 `mcpServers` 结构。配置文件的位置和格式因客户端而异，不能一概而论：
 
 ```json
 {
@@ -86,6 +85,26 @@ Claude Code（`.mcp.json`）、Cursor、Cline、Continue、Zed：
 }
 ```
 
+Zed 应在设置里使用 `context_servers`：
+
+```json
+{
+  "context_servers": {
+    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate@0.4.1"] }
+  }
+}
+```
+
+Codex 走 npm 时使用 TOML：
+
+```toml
+[mcp_servers.opencode_delegate]
+command = 'npx'
+args = ['-y', 'opencode-delegate@0.4.1']
+```
+
+Windows 上若客户端不能直接执行 `npx.cmd`，可以将 `command` 设为 `node.exe` 的绝对路径，
+并在 `args` 里填写已安装包的 `bin/opencode-delegate.js` 路径。按客户端自身规则注册，不默认添加 shell。
 改完配置后重启客户端。
 
 ### 3. 可选：作为 skill 安装
@@ -101,7 +120,8 @@ MCP 服务和 skill 两者相互独立，只用其中一个也能工作。
 oc_service {action: "status"}                                    # 后台服务是否在跑？
 oc_run     {task: "fix-flaky-test", workspace: "C:\\my\\proj",    # 预留会话、派单、开 TUI
             prompt: "<目标、允许改什么、约束、期望证据>"}
-oc_wait    {task: "fix-flaky-test", after_revision: 0}            # 真正有进展或完成时才唤醒
+oc_status  {task: "fix-flaky-test"}  # read the returned revision string
+oc_wait    {task: "fix-flaky-test", after_revision: "<revision from oc_status>"}            # 真正有进展或完成时才唤醒
 oc_result  {task: "fix-flaky-test"}                               # 最终文本 + 证据路径
 oc_continue{task: "fix-flaky-test", prompt: "<返工要求>"}          # 只用于已接受任务的返工
 ```
@@ -138,19 +158,16 @@ oc_continue{task: "fix-flaky-test", prompt: "<返工要求>"}          # 只用�
 `verification.status` 为 `verified` 表示请求的路由与导出结果一致，`adopted` 表示没有请求路由、直接采纳实际
 结果，而 `mismatch` / `inconsistent` / `unverifiable` 表示证据不支持这次运行——这几种会把该轮标记为待审阅。
 
-**不钉模型时，OpenCode 自己必须有一个可用的默认模型。** 裸装的 OpenCode 没有默认模型，这时不钉模型的派单会
-快速失败，报 `provider.auth ... Endpoint is unavailable`，因为兜底的端点根本不可达。给 OpenCode 配上默认模型
-（`~/.config/opencode/opencode.jsonc`）：
+**不钉模型时，需要 OpenCode 自己能选到可用模型。** 如果遇到 provider/auth 错误，请检查
+实际选择的模型、登录凭据、订阅权限与端点。403 并不一定意味着缺少默认模型。可以将自己有权限
+使用的模型合并进现有 OpenCode 配置，保留其他字段，例如：
 
 ```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "opencode-go/deepseek-v4.1-flash"
-}
+"model": "opencode-go/deepseek-v4.1-flash"
 ```
 
-这一处同时修好"不钉模型的派单"和"OpenCode 自己 TUI 的默认模型"。若不想动 OpenCode 的配置，也可以改设
-`OC_DELEGATE_MODEL`，只在 MCP 这一层钉一个默认值。
+也可设 `OC_DELEGATE_MODEL`，仅给本 MCP 钉定默认模型。安装器和启动器不会修改 OpenCode 配置，
+也不会在失败后静默切换 provider。
 
 ## 环境变量
 
@@ -159,20 +176,21 @@ oc_continue{task: "fix-flaky-test", prompt: "<返工要求>"}          # 只用�
 | `OC_DELEGATE_STATE` | `$CODEX_HOME/opencode-delegate/state`，否则 `~/.opencode-delegate/state` | 任务记录、轮次日志、viewer 记录的存放位置。 |
 | `OC_DELEGATE_MODEL` | 未设置 | 钉定一个默认子智能体模型。未设置时交给 OpenCode 自己的配置决定。 |
 | `OC_DELEGATE_LABEL` | `codex-delegate:` | OpenCode 会话标题前缀，标题剩余部分即任务名。 |
-| `OC_DELEGATE_WATCH` | `1` | 设为 `0` 可默认不打开 TUI viewer。 |
+| `OC_DELEGATE_WATCH` | Windows 为 `1`，其他平台为 `0` | 设为 `0` 禁用 viewer；非 Windows 的 watch 请求在创建进程前返回不支持。 |
 | `OC_DELEGATE_SESSION_WAIT` | `20` | 等待 viewer 就绪的秒数（上限 60）。 |
 | `OC_DELEGATE_OPENCODE` | 自动探测 | 覆盖 OpenCode 可执行文件路径。 |
-| `OC_DELEGATE_PYTHON`、`OC_DELEGATE_SERVER` | `sys.executable`、本目录 | 仅 `mcp_probe.py` 使用。 |
+| `OC_DELEGATE_PYTHON` | 自动探测 | npm 启动器使用的 Python 3.9+ 解释器；探针也会使用。 |
+| `OC_DELEGATE_SERVER` | 本目录 | 仅供 `mcp_probe.py` 覆盖服务脚本路径。 |
 
 ## 支持矩阵
 
 | 能力 | Windows 10/11 | macOS / Linux |
 |---|---|---|
-| 派单、流式状态、status、result、返工、恢复 | 可用 | 可用（POSIX 进程分支，**作者与 CI 均未实测**） |
-| 共享后台服务、显式 loopback server、standalone | 可用 | 可用 |
-| TUI viewer（`oc_watch` / `oc_unwatch`，每个工作区一个窗口） | 可用 | **不可用。** 桥接依赖 `CREATE_NEW_CONSOLE`、`ctypes` 进程标识和 OpenCode 内部 `ui.tabs` API。 |
+| 派发、状态、结果、返工、恢复 | 已验证预览版；OpenCode 2.0.26 | 实验性支持，作者未验证真实模型集成 |
+| TUI viewer、同窗口切 tab | 支持 | 不支持；默认关闭，显式请求也在启动进程前拒绝 |
 
-委派内核是跨平台的，只有带窗口的 viewer 是 Windows 专属。其他平台上正常派单收结果即可，跳过 watch 类工具。
+POSIX 子进程使用独立进程组，超时会清理后代进程。仓库 CI 覆盖这些分支，但并不等于已验证所有
+系统上的真实 OpenCode/provider 组合。首次发布以 Windows 为主要支持平台。
 
 ## 信任模型
 
@@ -193,16 +211,29 @@ scripts/delegate.py    派单、流式状态、守卫、恢复、状态查询
 scripts/runtime.py     MCP 编排 + TUI viewer 管理
 bridge/                OpenCode TUI 插件，注入到受管理的 viewer
 references/            状态 schema、恢复规则、状态字段
-tests/                 基于 tests/fake_opencode.py 的离线测试（66 个）
+tests/                 基于 tests/fake_opencode.py 的离线测试（标准库 unittest 测试）
 ```
 
 运行测试：
 
 ```powershell
-python -m pytest tests -q
+python -B -m unittest discover -s tests -v
+npm test
 ```
 
-测试使用假的 OpenCode 可执行文件，不联网、不产生付费模型调用。
+测试使用假的 OpenCode，不联网、不产生付费模型调用。Python 测试只用标准库；`npm test` 使用
+Node 内置断言。Python 3.9+ 和 Node 16+ 是独立前置，安装 OpenCode 并不保证两者齐全。
+
+发布前检查实际包：
+
+```powershell
+npm pack --ignore-scripts
+python -B tests/verify_package.py opencode-delegate-0.4.1.tgz
+```
+
+该检查验证精确文件白名单，并从解压后的包完成 Node -> Python 握手。CI 会预先放置缓存文件，
+验证它不会被打包。仓库包含 Windows/Linux/macOS、Python 3.9/3.12 的工作流；推送后才能获得
+这些环境的实际运行结果。本机验证不能替代完整跨平台验证。
 
 ## 许可证
 

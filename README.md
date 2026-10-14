@@ -27,10 +27,10 @@ actually need it: framing the task, judging the result, and integrating it.
 
 ## Install
 
-### 1. Get the code
+### 1. Get the code (source install only; skip this for npm)
 
 ```powershell
-git clone https://github.com/<you>/opencode-delegate.git "$env:USERPROFILE\.codex\skills\opencode-delegate"
+git clone https://github.com/Upstream17/opencode-delegate.git "$env:USERPROFILE\.codex\skills\opencode-delegate"
 ```
 
 Any directory works. Nothing in the runtime path hardcodes a user name or machine path: the scripts
@@ -43,13 +43,13 @@ Two variants. **A** names no paths at all; **B** runs this checkout directly.
 
 **A. Through the npm launcher (no paths, nothing to escape)**
 
-The bundled `bin/opencode-delegate.js` locates a Python 3 interpreter and hands it `mcp_server.py`, so
-every MCP client registers it the same way:
+The bundled `bin/opencode-delegate.js` locates Python 3.9+ and hands it `mcp_server.py`. Clients
+using a `mcpServers` configuration can register it as follows; other clients use their own schema:
 
 ```json
 {
   "mcpServers": {
-    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate"] }
+    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate@0.4.1"] }
   }
 }
 ```
@@ -75,8 +75,8 @@ A single `\P` inside a basic double-quoted string is an invalid escape and will 
 entirely. Validate with `python -c "import tomllib,pathlib;tomllib.loads(pathlib.Path('config.toml').read_text('utf-8'))"`
 before restarting.
 
-Every other MCP client uses the standard JSON shape — Claude Desktop (`claude_desktop_config.json`),
-Claude Code (`.mcp.json`), Cursor, Cline, Continue, Zed:
+Many clients, including Claude Desktop and Claude Code, use the following `mcpServers` shape.
+The configuration filename and schema depend on the client; it is not universal:
 
 ```json
 {
@@ -89,7 +89,27 @@ Claude Code (`.mcp.json`), Cursor, Cline, Continue, Zed:
 }
 ```
 
-Restart the client after editing its config.
+For Zed, use `context_servers` in its settings instead:
+
+```json
+{
+  "context_servers": {
+    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate@0.4.1"] }
+  }
+}
+```
+
+For Codex using npm, the TOML block is:
+
+```toml
+[mcp_servers.opencode_delegate]
+command = 'npx'
+args = ['-y', 'opencode-delegate@0.4.1']
+```
+
+On Windows, clients that cannot execute the `npx.cmd` shim directly can use the absolute path to
+`node.exe` and the installed package's `bin/opencode-delegate.js` as its argument. Do not add a shell
+unless the client specifically requires one. Restart the client after editing its config.
 
 ### 3. Optional: install as a skill
 
@@ -104,7 +124,8 @@ The MCP server and the skill are independent: you can use either one alone.
 oc_service {action: "status"}                                     # is the shared worker service up?
 oc_run     {task: "fix-flaky-test", workspace: "C:\\my\\proj",     # reserve a session, dispatch, open TUI
             prompt: "<objective, allowed changes, constraints, expected evidence>"}
-oc_wait    {task: "fix-flaky-test", after_revision: 0}             # wake on real progress/completion
+oc_status  {task: "fix-flaky-test"}  # read the returned revision string
+oc_wait    {task: "fix-flaky-test", after_revision: "<revision from oc_status>"}             # wake on real progress/completion
 oc_result  {task: "fix-flaky-test"}                                # final text + evidence paths
 oc_continue{task: "fix-flaky-test", prompt: "<rework>"}            # ONLY to rework an accepted task
 ```
@@ -144,19 +165,17 @@ a requested route matched the export, `adopted` when no route was requested, and
 `inconsistent` or `unverifiable` when the evidence did not support the run — those flag the turn for
 review.
 
-**If you leave the model unpinned, OpenCode needs a usable default of its own.** A bare OpenCode install
-has none, and an unpinned run then fails fast with `provider.auth ... Endpoint is unavailable`, because
-the fallback endpoint is not reachable. Give OpenCode a default in `~/.config/opencode/opencode.jsonc`:
+**Unpinned tasks need a usable model in OpenCode.** If a run fails with a provider/authentication
+error, check the chosen route, login, subscription and endpoint availability. A 403 alone does not
+prove that the default model is missing. Configure a model you can access, for example by merging
+the following field into your existing OpenCode config (preserve other settings):
 
 ```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "opencode-go/deepseek-v4.1-flash"
-}
+"model": "opencode-go/deepseek-v4.1-flash"
 ```
 
-That fixes unpinned runs and OpenCode's own TUI default at the same time. Setting `OC_DELEGATE_MODEL`
-instead pins a default at this layer without touching OpenCode's configuration.
+Alternatively, set `OC_DELEGATE_MODEL` to pin the default only for this MCP server. The installer and
+launcher never edit your OpenCode configuration or silently switch providers.
 
 ## Environment variables
 
@@ -165,21 +184,24 @@ instead pins a default at this layer without touching OpenCode's configuration.
 | `OC_DELEGATE_STATE` | `$CODEX_HOME/opencode-delegate/state`, else `~/.opencode-delegate/state` | Where task records, turn logs and viewer records live. |
 | `OC_DELEGATE_MODEL` | unset | Pins a default worker model. Unset leaves the choice to OpenCode's own configuration. |
 | `OC_DELEGATE_LABEL` | `codex-delegate:` | Prefix of the OpenCode session title, whose remainder is the task name. |
-| `OC_DELEGATE_WATCH` | `1` | Set `0` to disable opening the TUI viewer by default. |
+| `OC_DELEGATE_WATCH` | `1` on Windows, `0` elsewhere | Set `0` to disable the viewer. Non-Windows watch requests fail before spawning a process. |
 | `OC_DELEGATE_SESSION_WAIT` | `20` | Seconds to wait for the viewer to become ready (capped at 60). |
 | `OC_DELEGATE_OPENCODE` | auto-discovered | Override the OpenCode executable path. |
-| `OC_DELEGATE_PYTHON`, `OC_DELEGATE_SERVER` | `sys.executable`, this folder | Used by `mcp_probe.py` only. |
+| `OC_DELEGATE_PYTHON` | auto-discovered | Python 3.9+ executable for the npm launcher; also used by the probe. |
+| `OC_DELEGATE_SERVER` | this folder | Server script override for `mcp_probe.py` only. |
 
 ## Support matrix
 
 | Capability | Windows 10/11 | macOS / Linux |
 |---|---|---|
-| Dispatch, streaming state, status, result, rework, recovery | Yes | Yes (POSIX process branch, **not exercised by CI or by the author**) |
+| Dispatch, streaming state, status, result, rework, recovery | Yes | Experimental (POSIX branches; real model/TUI integration not validated by the author) |
 | Shared background service, explicit loopback server, standalone | Yes | Yes |
 | TUI viewer (`oc_watch`, `oc_unwatch`, one window per workspace) | Yes | **No.** The bridge uses `CREATE_NEW_CONSOLE`, `ctypes` process identity and OpenCode's internal `ui.tabs` API. |
 
-The delegation core is platform-neutral; only the windowed viewer is Windows-specific. On other
-platforms dispatch and collect results normally and simply skip the watch tools.
+Windows 10/11 + OpenCode 2.0.26 is the validated preview target. macOS/Linux core execution is
+experimental: the viewer is disabled by default, and `oc_watch` refuses to launch it. POSIX children
+run in their own process groups so timeout cleanup can terminate descendants. The CI matrix tests
+these branches; a configured real OpenCode provider is still required for end-to-end validation.
 
 ## Trust model
 
@@ -201,16 +223,31 @@ scripts/delegate.py    dispatch, streaming state, guards, recovery, status
 scripts/runtime.py     MCP orchestration + TUI viewer management
 bridge/                OpenCode TUI plugin, injected into managed viewers
 references/            state schema, recovery rules, status fields
-tests/                 offline tests against tests/fake_opencode.py (66 tests)
+tests/                 offline tests against tests/fake_opencode.py (standard-library unittest suite)
 ```
 
 Run the tests with:
 
 ```powershell
-python -m pytest tests -q
+python -B -m unittest discover -s tests -v
+npm test
 ```
 
-They use a fake OpenCode executable: no network access and no paid model calls.
+They use a fake OpenCode executable: no network access and no paid model calls. Python tests use
+only the standard library; `npm test` uses Node's built-in assertions. Python 3.9+ and Node 16+ are
+separate prerequisites; installing OpenCode alone does not guarantee both are present.
+
+Before publishing, build and check the actual package:
+
+```powershell
+npm pack --ignore-scripts
+python -B tests/verify_package.py opencode-delegate-0.4.1.tgz
+```
+
+This checks the exact file allowlist and starts the extracted package through Node -> Python. CI
+also plants a cache file before packing, so accidental bytecode inclusion is detected.
+The workflow includes Windows/Linux/macOS with Python 3.9/3.12. Those jobs run after a push;
+local Windows results alone do not establish full cross-platform compatibility.
 
 ## License
 

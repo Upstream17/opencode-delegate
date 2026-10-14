@@ -91,3 +91,15 @@ credentials. Only the last text event is kept as the final result (bounded); ful
   export reports truncation. `oc_service stop` refuses recorded running service-backed tasks.
 - Old task-keyed watcher records are not adopted using PID alone. Close pre-upgrade viewers once.
   Existing task/session state and evidence are compatible and need no migration.
+
+## Release portability (0.4.1)
+
+- Node probes Python >= 3.9 with a five-second timeout per candidate, including explicit overrides.
+  Both probes and the stdio server use `windowsHide`; only the managed TUI opens a console.
+- Non-Windows viewer requests fail before reading task state or spawning children. Headless dispatch
+  is the default there. POSIX CLI children use new sessions/process groups; timeout cleanup kills
+  their owned group. Detached descendants that create another session are outside this mechanism.
+- Both pinned and adopted model verification reject incomplete provider/model identities and
+  malformed message containers. No valid identity means `unverifiable`, never successful adoption.
+- npm uses an exact file allowlist. `tests/verify_package.py` checks the real tarball and the extracted
+  package's stdio handshake. Runtime dependencies remain Python's standard library only.

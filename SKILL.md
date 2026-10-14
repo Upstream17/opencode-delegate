@@ -47,10 +47,12 @@ Env overrides: `OC_DELEGATE_STATE`, `OC_DELEGATE_MODEL` (unset by default, which
 OpenCode's own configuration), `OC_DELEGATE_WATCH`,
 `OC_DELEGATE_SESSION_WAIT` (viewer readiness wait, default 20 s, capped at 60 s),
 `OC_DELEGATE_LABEL` (session title prefix, default `codex-delegate:`),
-`OC_DELEGATE_PYTHON` / `OC_DELEGATE_SERVER` (probe), `OC_DELEGATE_OPENCODE` (executable override).
+`OC_DELEGATE_PYTHON` (npm launcher and probe) / `OC_DELEGATE_SERVER` (probe), `OC_DELEGATE_OPENCODE` (executable override).
 
 ## Watching the worker
 
+- The viewer is supported only on Windows. Other platforms default to headless dispatch; explicit
+  `oc_watch` fails before spawning a process. macOS/Linux core execution is experimental.
 - **One persistent TUI process per workspace.** First use opens it; later tasks select/open their
   tabs in that same process. Normal calls never retire a live window or inject keyboard input.
   `force: true` explicitly recreates a managed viewer.

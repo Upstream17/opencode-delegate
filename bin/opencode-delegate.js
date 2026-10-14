@@ -22,10 +22,12 @@ const CANDIDATES = process.platform === 'win32'
 
 function resolvePython() {
   const explicit = process.env.OC_DELEGATE_PYTHON
-  if (explicit) return [explicit, []]
-  for (const [command, prefix] of CANDIDATES) {
-    // A silent probe: success only means this interpreter exists and starts.
-    const probe = spawnSync(command, [...prefix, '-c', 'import sys'], { stdio: 'ignore' })
+  const candidates = explicit ? [[explicit, []]] : CANDIDATES
+  for (const [command, prefix] of candidates) {
+    const probe = spawnSync(command, [...prefix, '-c',
+      'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'], {
+      stdio: 'ignore', windowsHide: true, timeout: 5000
+    })
     if (!probe.error && probe.status === 0) return [command, prefix]
   }
   return null
@@ -34,7 +36,7 @@ function resolvePython() {
 const python = resolvePython()
 if (!python) {
   process.stderr.write(
-    'opencode-delegate: no Python 3 interpreter found on PATH.\n' +
+    'opencode-delegate: no usable Python 3.9+ interpreter found (missing, too old, or probe timed out).\n' +
     'Install Python 3.9+ (https://www.python.org/downloads/) and restart the MCP client, or set\n' +
     'OC_DELEGATE_PYTHON to an absolute interpreter path in the server environment.\n')
   process.exit(127)
@@ -43,6 +45,7 @@ if (!python) {
 const [command, prefix] = python
 const child = spawn(command, [...prefix, SERVER, ...process.argv.slice(2)], {
   stdio: 'inherit',
+  windowsHide: true,
   env: {
     ...process.env,
     // Keep the stdio protocol UTF-8 whatever the system locale is (a GBK locale corrupts

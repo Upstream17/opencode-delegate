@@ -12,7 +12,7 @@ import threading
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'scripts'))
 import runtime
 
-SERVER_VERSION = '0.4.0'
+SERVER_VERSION = '0.4.1'
 PROTOCOL_VERSION = '2024-11-05'
 SUPPORTED_PROTOCOLS = ('2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25')
 INSTRUCTIONS = ('Delegate one bounded task per new session. run/continue/recover return executor acceptance, '
@@ -24,7 +24,8 @@ INSTRUCTIONS = ('Delegate one bounded task per new session. run/continue/recover
 TOOLS = [{'name': 'oc_run',
   'description': 'Start a new bounded task in a new OpenCode session. Returns accepted=true only '
                  'after executor validation under the task lock. A viewer failure is reported '
-                 'separately and never rejects an accepted task. Default watch=true: open one TUI '
+                 'separately and never rejects an accepted task. Windows defaults to watch=true; '
+                 'other platforms default to headless execution. On Windows open one TUI '
                  'per workspace, then switch tabs in that same process. Use oc_wait/oc_status, '
                  'then oc_result; completion is not acceptance.',
   'inputSchema': {'type': 'object',
@@ -176,7 +177,7 @@ TOOLS = [{'name': 'oc_run',
                   'openWorldHint': False,
                   'idempotentHint': True}},
  {'name': 'oc_watch',
-  'description': 'Open the workspace TUI once, or select this task tab in the existing TUI with an '
+  'description': 'Windows only: open the workspace TUI once, or select this task tab in the existing TUI with an '
                  'acknowledgement. Normal calls never close/reopen a live window. force=true '
                  'explicitly recreates a managed viewer.',
   'inputSchema': {'type': 'object',

@@ -29,7 +29,7 @@ def read_json(path):
 
 class DelegateTest(unittest.TestCase):
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._tmp = tempfile.TemporaryDirectory(**({"ignore_cleanup_errors": True} if sys.version_info >= (3, 10) else {}))
         self.base = Path(self._tmp.name)
         self.workspace = self.base / "workspace"
         self.workspace.mkdir()

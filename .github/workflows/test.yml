@@ -1,0 +1,29 @@
+name: Release checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python: ['3.9', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: python -B -m unittest discover -s tests -v
+      - run: npm test
+      - name: Plant an excluded cache fixture
+        run: python -c "from pathlib import Path; p=Path('scripts/__pycache__'); p.mkdir(exist_ok=True); (p/'must-not-ship.pyc').write_bytes(b'cache')"
+      - run: npm pack --ignore-scripts
+      - run: python -B tests/verify_package.py opencode-delegate-0.4.1.tgz
