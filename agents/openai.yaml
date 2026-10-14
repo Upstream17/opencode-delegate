@@ -1,0 +1,3 @@
+interface:
+  display_name: "OpenCode Delegate"
+  short_description: "Delegate local tasks to OpenCode with verified DeepSeek routing"
