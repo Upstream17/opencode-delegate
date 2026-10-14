@@ -43,10 +43,12 @@ TOOLS = [{'name': 'oc_run',
                                             'maxLength': 200000},
                                  'model': {'type': 'string',
                                            'description': 'OpenCode model route for this task. '
-                                                          'Omit to run on whichever model '
-                                                          'OpenCode is configured with; the '
-                                                          'result then reports the route actually '
-                                                          'used.',
+                                                          'Omit to let the default be resolved: '
+                                                          'OC_DELEGATE_MODEL, else the default '
+                                                          'model in OpenCode\'s own configuration, '
+                                                          'else OpenCode\'s own choice. The result '
+                                                          'reports the route used as model and '
+                                                          'model_source.',
                                            'minLength': 1,
                                            'maxLength': 200},
                                  'watch': {'type': 'boolean',

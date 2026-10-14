@@ -43,8 +43,9 @@ updates alone do not wake it. Completion, failure and meaningful activity do. Re
 review evidence after the turn ends. `oc_status` preserves top-level activity aliases and adds the
 executor's heartbeat/process liveness diagnostics. Usage is diagnostic, never a reuse gate.
 
-Env overrides: `OC_DELEGATE_STATE`, `OC_DELEGATE_MODEL` (unset by default, which leaves the model to
-OpenCode's own configuration), `OC_DELEGATE_WATCH`,
+Env overrides: `OC_DELEGATE_STATE`, `OC_DELEGATE_MODEL` (unset by default; a task that names no model
+then inherits the default model from OpenCode's own configuration — read, never written — and only
+if that is unset too does OpenCode choose), `OC_DELEGATE_WATCH`,
 `OC_DELEGATE_SESSION_WAIT` (viewer readiness wait, default 20 s, capped at 60 s),
 `OC_DELEGATE_LABEL` (session title prefix, default `codex-delegate:`),
 `OC_DELEGATE_PYTHON` (npm launcher and probe) / `OC_DELEGATE_SERVER` (probe), `OC_DELEGATE_OPENCODE` (executable override).

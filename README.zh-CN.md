@@ -158,7 +158,11 @@ oc_continue{task: "fix-flaky-test", prompt: "<返工要求>"}          # 只用�
 `verification.status` 为 `verified` 表示请求的路由与导出结果一致，`adopted` 表示没有请求路由、直接采纳实际
 结果，而 `mismatch` / `inconsistent` / `unverifiable` 表示证据不支持这次运行——这几种会把该轮标记为待审阅。
 
-**不钉模型时，需要 OpenCode 自己能选到可用模型。** 如果遇到 provider/auth 错误，请检查
+**不钉模型的任务会自动继承 OpenCode 自身的默认模型。** 它会读取 OpenCode 解析后的配置里的默认模型，
+所以只要在 OpenCode 里设过一次默认模型，TUI 和所有被委派的任务就都跟着用同一个，这里不需要任何配置。
+如果哪里都没设默认值，则由 OpenCode 自行选择。
+
+**但这个默认模型本身必须可用。** 如果遇到 provider/auth 错误，请检查
 实际选择的模型、登录凭据、订阅权限与端点。403 并不一定意味着缺少默认模型。可以将自己有权限
 使用的模型合并进现有 OpenCode 配置，保留其他字段，例如：
 
@@ -174,7 +178,7 @@ oc_continue{task: "fix-flaky-test", prompt: "<返工要求>"}          # 只用�
 | 变量 | 默认值 | 含义 |
 |---|---|---|
 | `OC_DELEGATE_STATE` | `$CODEX_HOME/opencode-delegate/state`，否则 `~/.opencode-delegate/state` | 任务记录、轮次日志、viewer 记录的存放位置。 |
-| `OC_DELEGATE_MODEL` | 未设置 | 钉定一个默认子智能体模型。未设置时交给 OpenCode 自己的配置决定。 |
+| `OC_DELEGATE_MODEL` | 未设置 | 钉定一个默认子智能体模型。未设置时会读取 OpenCode 自身配置里的默认模型（只读，不修改）；若那里也没有，才交给 OpenCode 自行决定。 |
 | `OC_DELEGATE_LABEL` | `codex-delegate:` | OpenCode 会话标题前缀，标题剩余部分即任务名。 |
 | `OC_DELEGATE_WATCH` | Windows 为 `1`，其他平台为 `0` | 设为 `0` 禁用 viewer；非 Windows 的 watch 请求在创建进程前返回不支持。 |
 | `OC_DELEGATE_SESSION_WAIT` | `20` | 等待 viewer 就绪的秒数（上限 60）。 |

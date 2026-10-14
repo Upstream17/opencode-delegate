@@ -165,7 +165,12 @@ a requested route matched the export, `adopted` when no route was requested, and
 `inconsistent` or `unverifiable` when the evidence did not support the run — those flag the turn for
 review.
 
-**Unpinned tasks need a usable model in OpenCode.** If a run fails with a provider/authentication
+**Unpinned tasks inherit OpenCode's own default.** A task that names no model reads the default
+model from OpenCode's resolved configuration, so setting that default once (however you prefer to
+set it in OpenCode) configures both the TUI and every delegated task, with nothing to configure
+here. If no default is configured anywhere, OpenCode chooses for itself.
+
+**That default still has to be usable.** If a run fails with a provider/authentication
 error, check the chosen route, login, subscription and endpoint availability. A 403 alone does not
 prove that the default model is missing. Configure a model you can access, for example by merging
 the following field into your existing OpenCode config (preserve other settings):
@@ -182,7 +187,7 @@ launcher never edit your OpenCode configuration or silently switch providers.
 | Variable | Default | Meaning |
 |---|---|---|
 | `OC_DELEGATE_STATE` | `$CODEX_HOME/opencode-delegate/state`, else `~/.opencode-delegate/state` | Where task records, turn logs and viewer records live. |
-| `OC_DELEGATE_MODEL` | unset | Pins a default worker model. Unset leaves the choice to OpenCode's own configuration. |
+| `OC_DELEGATE_MODEL` | unset | Pins a default worker model. Unset falls back to the default model in OpenCode's own configuration (read through `opencode debug config`, never written); if that is unset too, OpenCode chooses. |
 | `OC_DELEGATE_LABEL` | `codex-delegate:` | Prefix of the OpenCode session title, whose remainder is the task name. |
 | `OC_DELEGATE_WATCH` | `1` on Windows, `0` elsewhere | Set `0` to disable the viewer. Non-Windows watch requests fail before spawning a process. |
 | `OC_DELEGATE_SESSION_WAIT` | `20` | Seconds to wait for the viewer to become ready (capped at 60). |

@@ -40,13 +40,80 @@ def _default_state_root() -> Path:
 
 
 STATE_ROOT = _default_state_root()
-# None means "no model pinned": the worker runs on whichever model OpenCode's own configuration
-# selects, and the verification adopts the route that was actually used. Set OC_DELEGATE_MODEL to
-# force a default, or pass model per task.
+# Worker model for a task that names none, resolved by resolve_model(): OC_DELEGATE_MODEL first,
+# then the default model in OpenCode's own configuration, then none at all (OpenCode picks and the
+# verification adopts the route it actually used).
 DEFAULT_MODEL = os.environ.get('OC_DELEGATE_MODEL') or None
 VIEWER_SUPPORTED = sys.platform == 'win32'
 WATCH_DEFAULT = VIEWER_SUPPORTED and os.environ.get('OC_DELEGATE_WATCH', '1').lower() not in ('0', 'false', 'no')
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+_CONFIGURED_MODEL = {}
+
+
+def _model_from_config_sources(sources):
+    """Pick the default model out of `opencode debug config` sources.
+
+    OpenCode lists every configuration source, so the last one that names a model wins (a project
+    opencode.json overrides the global one). A model written as "provider/model" is echoed back as
+    a {"providerID", "model"} object, so both shapes are accepted.
+    """
+    chosen = None
+    if not isinstance(sources, list):
+        return None
+    for source in sources:
+        info = source.get('info') if isinstance(source, dict) else None
+        if not isinstance(info, dict):
+            continue
+        model = info.get('model')
+        if isinstance(model, str) and model.strip():
+            chosen = model.strip()
+            continue
+        if not isinstance(model, dict):
+            continue
+        provider, name = model.get('providerID'), model.get('model')
+        if not (isinstance(provider, str) and provider.strip() and isinstance(name, str) and name.strip()):
+            continue
+        route = provider.strip() + '/' + name.strip()
+        variant = model.get('variant')
+        chosen = route + ('#' + variant.strip() if isinstance(variant, str) and variant.strip() else '')
+    return chosen
+
+
+def opencode_default_model(workspace):
+    """Read the default model from OpenCode's own configuration. Never writes to it.
+
+    `opencode debug config` resolves global and per-project configuration the way a real OpenCode
+    run does. Any failure (older CLI without the subcommand, malformed output, timeout) just means
+    "unknown", and the task runs unpinned exactly as before. Successful reads are cached per
+    workspace; a miss is retried on every dispatch so a config change needs no server restart.
+    """
+    key = str(workspace)
+    if key in _CONFIGURED_MODEL:
+        return _CONFIGURED_MODEL[key]
+    model = None
+    try:
+        prefix = delegate.command_prefix(os.environ.get('OC_DELEGATE_OPENCODE'))
+        code, output, _, timed_out = delegate.run_blocking(prefix + ['debug', 'config'], key, 15)
+        if code == 0 and not timed_out:
+            model = _model_from_config_sources(json.loads(output))
+    except Exception:
+        model = None
+    if model:
+        _CONFIGURED_MODEL[key] = model
+    return model
+
+
+def resolve_model(requested, workspace):
+    """Return (model, source) for a task that may or may not name a model."""
+    if requested:
+        return requested, 'requested'
+    if DEFAULT_MODEL:
+        return DEFAULT_MODEL, 'OC_DELEGATE_MODEL'
+    found = opencode_default_model(workspace)
+    if found:
+        return found, 'opencode-config'
+    return None, None
 
 
 def reap_later(proc):
@@ -308,12 +375,13 @@ def dispatch(action, args):
                 raise ValueError('Workspace must be a directory')
             if state_file(task).exists():
                 raise ValueError('Task already exists; choose a new task name')
-            model = args.get('model') or DEFAULT_MODEL
+            model, model_source = resolve_model(args.get('model'), workspace)
             session_id = 'ses_' + ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(26))
         else:
             state = read_state(task)
             workspace = state['workspace']
             model = args.get('model') or state['model']
+            model_source = 'recorded'
             session_id = state['session_id']
             backend = delegate.validate_backend(state.get('backend'))
             flags += delegate.backend_flags(backend)
@@ -348,7 +416,8 @@ def dispatch(action, args):
         receipt = read_json(startup)
         if receipt.get('dispatch_id') != dispatch_id or not receipt.get('accepted'):
             raise RuntimeError(receipt.get('error') or 'Worker did not acknowledge this dispatch')
-    result = {**receipt, 'session_id': session_id, 'model': model, 'startup_path': str(startup)}
+    result = {**receipt, 'session_id': session_id, 'model': model, 'model_source': model_source,
+              'startup_path': str(startup)}
     if args.get('watch', WATCH_DEFAULT):
         try:
             if not VIEWER_SUPPORTED:
