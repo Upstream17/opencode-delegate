@@ -48,8 +48,6 @@ class ConfigSourcesTest(unittest.TestCase):
 
 class OpenCodeDefaultModelTest(unittest.TestCase):
     def setUp(self):
-        runtime._CONFIGURED_MODEL.clear()
-        self.addCleanup(runtime._CONFIGURED_MODEL.clear)
         prefix = mock.patch.object(runtime.delegate, "command_prefix", return_value=["opencode"])
         prefix.start()
         self.addCleanup(prefix.stop)
@@ -63,16 +61,14 @@ class OpenCodeDefaultModelTest(unittest.TestCase):
         with self._blocking(payload):
             self.assertEqual(runtime.opencode_default_model("C:/work"), "opencode-go/deepseek-v4.1-flash")
 
-    def test_success_is_cached_but_a_miss_is_retried(self):
-        with self._blocking(json.dumps([])) as blocked:
-            self.assertIsNone(runtime.opencode_default_model("C:/work"))
-            runtime.opencode_default_model("C:/work")
-            self.assertEqual(blocked.call_count, 2)
-        good = json.dumps([{"info": {"model": "opencode-go/glm-5.3"}}])
-        with self._blocking(good) as blocked:
+    def test_every_call_re_reads_so_config_edits_are_never_stale(self):
+        first = json.dumps([{"info": {"model": "opencode-go/glm-5.3"}}])
+        second = json.dumps([{"info": {"model": "opencode-go/kimi-k3"}}])
+        with self._blocking(first) as blocked:
             self.assertEqual(runtime.opencode_default_model("C:/work"), "opencode-go/glm-5.3")
-            runtime.opencode_default_model("C:/work")
-            self.assertEqual(blocked.call_count, 1)
+            blocked.return_value = (0, second, "", False)
+            self.assertEqual(runtime.opencode_default_model("C:/work"), "opencode-go/kimi-k3")
+            self.assertEqual(blocked.call_count, 2)
 
     def test_failures_and_garbage_yield_no_model(self):
         with self._blocking("", code=1):
@@ -86,10 +82,6 @@ class OpenCodeDefaultModelTest(unittest.TestCase):
 
 
 class ResolveModelTest(unittest.TestCase):
-    def setUp(self):
-        runtime._CONFIGURED_MODEL.clear()
-        self.addCleanup(runtime._CONFIGURED_MODEL.clear)
-
     def test_requested_model_wins_over_everything(self):
         with mock.patch.object(runtime, "DEFAULT_MODEL", "opencode-go/glm-5.3"):
             with mock.patch.object(runtime, "opencode_default_model", return_value="opencode-go/x"):

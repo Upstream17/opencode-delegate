@@ -48,9 +48,6 @@ VIEWER_SUPPORTED = sys.platform == 'win32'
 WATCH_DEFAULT = VIEWER_SUPPORTED and os.environ.get('OC_DELEGATE_WATCH', '1').lower() not in ('0', 'false', 'no')
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
-_CONFIGURED_MODEL = {}
-
-
 def _model_from_config_sources(sources):
     """Pick the default model out of `opencode debug config` sources.
 
@@ -85,23 +82,18 @@ def opencode_default_model(workspace):
 
     `opencode debug config` resolves global and per-project configuration the way a real OpenCode
     run does. Any failure (older CLI without the subcommand, malformed output, timeout) just means
-    "unknown", and the task runs unpinned exactly as before. Successful reads are cached per
-    workspace; a miss is retried on every dispatch so a config change needs no server restart.
+    "unknown", and the task runs unpinned exactly as before. The read is repeated on every dispatch
+    rather than cached: this server can outlive many configuration edits, and a stale default would
+    silently outrank the user's own setting.
     """
-    key = str(workspace)
-    if key in _CONFIGURED_MODEL:
-        return _CONFIGURED_MODEL[key]
-    model = None
     try:
         prefix = delegate.command_prefix(os.environ.get('OC_DELEGATE_OPENCODE'))
-        code, output, _, timed_out = delegate.run_blocking(prefix + ['debug', 'config'], key, 15)
+        code, output, _, timed_out = delegate.run_blocking(prefix + ['debug', 'config'], str(workspace), 15)
         if code == 0 and not timed_out:
-            model = _model_from_config_sources(json.loads(output))
+            return _model_from_config_sources(json.loads(output))
     except Exception:
-        model = None
-    if model:
-        _CONFIGURED_MODEL[key] = model
-    return model
+        pass
+    return None
 
 
 def resolve_model(requested, workspace):

@@ -99,8 +99,9 @@ credentials. Only the last text event is kept as the final result (bounded); ful
   `opencode debug config` inside the task workspace, so a project `opencode.json` overrides the
   global config exactly as a real run would; the file is never written to. `oc_run` reports which
   layer supplied the route as `model_source` (`requested`, `OC_DELEGATE_MODEL`, `opencode-config`,
-  `recorded`, or null). Any read failure means "unknown" and the task runs unpinned as before;
-  successful reads are cached per workspace, misses are retried on every dispatch.
+  `recorded`, or null). Any read failure means "unknown" and the task runs unpinned as before. The
+  read is never cached, so editing the OpenCode default takes effect on the next dispatch instead of
+  needing a server restart.
 - Node probes Python >= 3.9 with a five-second timeout per candidate, including explicit overrides.
   Both probes and the stdio server use `windowsHide`; only the managed TUI opens a console.
 - Non-Windows viewer requests fail before reading task state or spawning children. Headless dispatch
