@@ -22,7 +22,7 @@ actually need it: framing the task, judging the result, and integrating it.
 |---|---|
 | Python | 3.9 or newer (developed and tested on 3.12). **No third-party packages** — standard library only. |
 | OpenCode CLI | Tested with 2.0.26. Must be installed and paired on the machine. |
-| A model route | Default `opencode-go/deepseek-v4.1-flash`, which needs an OpenCode Go subscription. |
+| A model route | Whatever OpenCode is already configured with. Recommended: `opencode-go/deepseek-v4.1-flash`, which needs an OpenCode Go subscription. |
 | OS | Windows 10/11 for the full feature set. See [support matrix](#support-matrix). |
 
 ## Install
@@ -38,6 +38,27 @@ resolve their own location from `__file__`, the state root defaults to `$CODEX_H
 (falling back to `~/.opencode-delegate/state`), and the OpenCode executable is discovered at run time.
 
 ### 2. Register the MCP server
+
+Two variants. **A** names no paths at all; **B** runs this checkout directly.
+
+**A. Through the npm launcher (no paths, nothing to escape)**
+
+The bundled `bin/opencode-delegate.js` locates a Python 3 interpreter and hands it `mcp_server.py`, so
+every MCP client registers it the same way:
+
+```json
+{
+  "mcpServers": {
+    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate"] }
+  }
+}
+```
+
+Python 3.9+ still has to be on the machine; the launcher probes `py -3`, `python` and `python3` and
+honours `OC_DELEGATE_PYTHON`. Before this is published to npm you can point at the repository instead:
+`"args": ["-y", "github:Upstream17/opencode-delegate"]`.
+
+**B. Directly from the checkout (absolute paths)**
 
 The only machine-specific piece. **Use absolute paths** to a Python interpreter and to `mcp_server.py`.
 
@@ -107,12 +128,42 @@ Read `oc_status` / `oc_result` and inspect the evidence yourself.
 | `oc_watch` / `oc_unwatch` | Open or focus / close the TUI window for a task's workspace. |
 | `oc_service` | `status` / `start` / `stop` the shared background service. |
 
+## Choosing a model
+
+Nothing is pinned by default. With no `model`, the worker runs on whichever model your OpenCode
+configuration selects, and the turn records the route that was actually used:
+
+```jsonc
+"verification": { "status": "adopted", "providerID": "opencode-go", "id": "deepseek-v4.1-flash" }
+```
+
+Pass `model` on `oc_run` to pin one per task, or set `OC_DELEGATE_MODEL` to change the default for
+every task. A pinned task keeps its route: `oc_continue` and `oc_recover` inherit it, and passing a
+different model is rejected rather than silently swapping it. `verification.status` is `verified` when
+a requested route matched the export, `adopted` when no route was requested, and `mismatch`,
+`inconsistent` or `unverifiable` when the evidence did not support the run — those flag the turn for
+review.
+
+**If you leave the model unpinned, OpenCode needs a usable default of its own.** A bare OpenCode install
+has none, and an unpinned run then fails fast with `provider.auth ... Endpoint is unavailable`, because
+the fallback endpoint is not reachable. Give OpenCode a default in `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/deepseek-v4.1-flash"
+}
+```
+
+That fixes unpinned runs and OpenCode's own TUI default at the same time. Setting `OC_DELEGATE_MODEL`
+instead pins a default at this layer without touching OpenCode's configuration.
+
 ## Environment variables
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `OC_DELEGATE_STATE` | `$CODEX_HOME/opencode-delegate/state`, else `~/.opencode-delegate/state` | Where task records, turn logs and viewer records live. |
-| `OC_DELEGATE_MODEL` | `opencode-go/deepseek-v4.1-flash` | Default worker model. Always passed explicitly, never silently substituted. |
+| `OC_DELEGATE_MODEL` | unset | Pins a default worker model. Unset leaves the choice to OpenCode's own configuration. |
 | `OC_DELEGATE_LABEL` | `codex-delegate:` | Prefix of the OpenCode session title, whose remainder is the task name. |
 | `OC_DELEGATE_WATCH` | `1` | Set `0` to disable opening the TUI viewer by default. |
 | `OC_DELEGATE_SESSION_WAIT` | `20` | Seconds to wait for the viewer to become ready (capped at 60). |

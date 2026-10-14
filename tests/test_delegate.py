@@ -16,6 +16,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DELEGATE = ROOT / "scripts" / "delegate.py"
 FAKE = Path(__file__).resolve().parent / "fake_opencode.py"
+# Pin a model whenever a test needs route verification to be observable. With no --model the
+# helper adopts OpenCode's own route rather than asserting one, so a mismatching export is
+# adopted instead of flagged, and tests that use FAKE_MODE=mismatch as a failure generator
+# (including the plain "run" ones) must pin it explicitly.
+MODEL = "opencode-go/deepseek-v4.1-flash"
 
 
 def read_json(path):
@@ -141,15 +146,28 @@ class DelegateTest(unittest.TestCase):
     # ---- verification / model ---------------------------------------------
 
     def test_model_mismatch_needs_review(self):
-        result = self.run_delegate(task="mm", env={"FAKE_MODE": "mismatch"})
+        result = self.run_delegate("--model", MODEL, task="mm", env={"FAKE_MODE": "mismatch"})
         self.assertNotEqual(result.returncode, 0)
         record = read_json(self.state / "mm.json")
         self.assertEqual(record["status"], "needs_review")
         self.assertEqual(record["verification"]["status"], "mismatch")
         self.assertIsNone(record["verified_model"])
 
+    def test_unpinned_model_adopts_the_route_opencode_selected(self):
+        # No --model: the worker runs on OpenCode's own default and the turn adopts the actual route.
+        result = self.run_delegate(task="adopt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = read_json(self.state / "adopt.json")
+        self.assertEqual(record["status"], "completed")
+        self.assertIsNone(record["model"])
+        self.assertEqual(record["verification"]["status"], "adopted")
+        self.assertEqual(record["verification"]["id"], "deepseek-v4.1-flash")
+        self.assertEqual(record["verified_model"]["id"], "deepseek-v4.1-flash")
+        run_calls = [entry for entry in self.argv_log() if entry and entry[0] == "run"]
+        self.assertNotIn("--model", run_calls[-1], "an unpinned run must not force a model")
+
     def test_continuation_clears_stale_verification(self):
-        first = self.run_delegate(task="cont")
+        first = self.run_delegate("--model", MODEL, task="cont")
         self.assertEqual(first.returncode, 0, first.stderr)
         record = read_json(self.state / "cont.json")
         self.assertIsNotNone(record["verified_model"])
@@ -310,13 +328,13 @@ class DelegateTest(unittest.TestCase):
         self.assertIn("original workspace and model", mismatch.stdout + mismatch.stderr)
 
     def test_continue_of_failed_task_rejected(self):
-        self.run_delegate(task="failed", env={"FAKE_MODE": "mismatch"})
+        self.run_delegate("--model", MODEL, task="failed", env={"FAKE_MODE": "mismatch"})
         result = self.run_delegate(action="continue", task="failed")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("did not complete", result.stdout + result.stderr)
 
     def test_recover_requires_acknowledgement_and_resumes_same_session(self):
-        self.run_delegate(task="rec", env={"FAKE_MODE": "mismatch"})
+        self.run_delegate("--model", MODEL, task="rec", env={"FAKE_MODE": "mismatch"})
         record = read_json(self.state / "rec.json")
         session = record["session_id"]
         denied = self.run_delegate(action="recover", task="rec")
@@ -329,7 +347,7 @@ class DelegateTest(unittest.TestCase):
         self.assertEqual(run_calls[-1][run_calls[-1].index("--session") + 1], session)
 
     def test_recover_backend_mismatch_rejected(self):
-        self.run_delegate("--standalone", task="rb", env={"FAKE_MODE": "mismatch"})
+        self.run_delegate("--standalone", "--model", MODEL, task="rb", env={"FAKE_MODE": "mismatch"})
         result = self.run_delegate("--acknowledge-inspected", action="recover", task="rb")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Backend mismatch", result.stdout + result.stderr)
@@ -459,7 +477,7 @@ class DelegateTest(unittest.TestCase):
     # ---- recovery acknowledgement / residual process -----------------------
 
     def test_shared_recovery_requires_idle_ack(self):
-        self.run_delegate(task="idle", env={"FAKE_MODE": "mismatch"})
+        self.run_delegate("--model", MODEL, task="idle", env={"FAKE_MODE": "mismatch"})
         before = (self.state / "idle.json").read_bytes()
         blocked = self.run_delegate("--acknowledge-inspected", action="recover", task="idle")
         self.assertNotEqual(blocked.returncode, 0)

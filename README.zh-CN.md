@@ -21,7 +21,7 @@ Claude Code、Claude Desktop、Cursor、Cline、Continue、Zed、Windsurf。主�
 |---|---|
 | Python | 3.9 或更高（在 3.12 上开发与测试）。**无任何第三方依赖**，只用标准库。 |
 | OpenCode CLI | 在 2.0.26 上测试过。需已安装并完成配对。 |
-| 模型路由 | 默认 `opencode-go/deepseek-v4.1-flash`，需要 OpenCode Go 订阅。 |
+| 模型路由 | 用你 OpenCode 里已经配好的那个。推荐 `opencode-go/deepseek-v4.1-flash`，需要 OpenCode Go 订阅。 |
 | 操作系统 | 完整功能需要 Windows 10/11，见下方支持矩阵。 |
 
 ## 安装
@@ -37,6 +37,26 @@ git clone https://github.com/<you>/opencode-delegate.git "$env:USERPROFILE\.code
 OpenCode 可执行文件在运行时动态探测。
 
 ### 2. 注册 MCP 服务
+
+两种方式。**A** 完全不写路径；**B** 直接跑这份检出。
+
+**A. 走 npm 启动器（无路径、无需转义）**
+
+自带的 `bin/opencode-delegate.js` 会找到 Python 3 解释器并把 `mcp_server.py` 交给它，所有 MCP 客户端
+注册方式都一样：
+
+```json
+{
+  "mcpServers": {
+    "opencode_delegate": { "command": "npx", "args": ["-y", "opencode-delegate"] }
+  }
+}
+```
+
+机器上仍然需要 Python 3.9+；启动器会依次探测 `py -3`、`python`、`python3`，并认 `OC_DELEGATE_PYTHON`。
+在发布到 npm 之前，可以直接指向仓库：`"args": ["-y", "github:Upstream17/opencode-delegate"]`。
+
+**B. 直接从检出运行（绝对路径）**
 
 这是唯一一处与机器相关的地方，**必须使用绝对路径**指向 Python 解释器和 `mcp_server.py`。
 
@@ -105,12 +125,39 @@ oc_continue{task: "fix-flaky-test", prompt: "<返工要求>"}          # 只用�
 | `oc_watch` / `oc_unwatch` | 打开或聚焦 / 关闭该任务工作区的 TUI 窗口。 |
 | `oc_service` | `status` / `start` / `stop` 共享后台服务。 |
 
+## 选择模型
+
+默认不钉任何模型。不传 `model` 时，子智能体跑在你 OpenCode 自己配置的模型上，任务记录会写下实际使用的路由：
+
+```jsonc
+"verification": { "status": "adopted", "providerID": "opencode-go", "id": "deepseek-v4.1-flash" }
+```
+
+在 `oc_run` 上传 `model` 可以为单个任务钉定模型；设 `OC_DELEGATE_MODEL` 可以改所有任务的默认值。已钉定的任务
+会保持自己的路由：`oc_continue` 与 `oc_recover` 自动继承，传一个不一样的模型会被拒绝，而不是被静默换掉。
+`verification.status` 为 `verified` 表示请求的路由与导出结果一致，`adopted` 表示没有请求路由、直接采纳实际
+结果，而 `mismatch` / `inconsistent` / `unverifiable` 表示证据不支持这次运行——这几种会把该轮标记为待审阅。
+
+**不钉模型时，OpenCode 自己必须有一个可用的默认模型。** 裸装的 OpenCode 没有默认模型，这时不钉模型的派单会
+快速失败，报 `provider.auth ... Endpoint is unavailable`，因为兜底的端点根本不可达。给 OpenCode 配上默认模型
+（`~/.config/opencode/opencode.jsonc`）：
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/deepseek-v4.1-flash"
+}
+```
+
+这一处同时修好"不钉模型的派单"和"OpenCode 自己 TUI 的默认模型"。若不想动 OpenCode 的配置，也可以改设
+`OC_DELEGATE_MODEL`，只在 MCP 这一层钉一个默认值。
+
 ## 环境变量
 
 | 变量 | 默认值 | 含义 |
 |---|---|---|
 | `OC_DELEGATE_STATE` | `$CODEX_HOME/opencode-delegate/state`，否则 `~/.opencode-delegate/state` | 任务记录、轮次日志、viewer 记录的存放位置。 |
-| `OC_DELEGATE_MODEL` | `opencode-go/deepseek-v4.1-flash` | 默认子智能体模型。始终显式传入，绝不静默替换。 |
+| `OC_DELEGATE_MODEL` | 未设置 | 钉定一个默认子智能体模型。未设置时交给 OpenCode 自己的配置决定。 |
 | `OC_DELEGATE_LABEL` | `codex-delegate:` | OpenCode 会话标题前缀，标题剩余部分即任务名。 |
 | `OC_DELEGATE_WATCH` | `1` | 设为 `0` 可默认不打开 TUI viewer。 |
 | `OC_DELEGATE_SESSION_WAIT` | `20` | 等待 viewer 就绪的秒数（上限 60）。 |

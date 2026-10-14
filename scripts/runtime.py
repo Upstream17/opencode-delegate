@@ -40,7 +40,10 @@ def _default_state_root() -> Path:
 
 
 STATE_ROOT = _default_state_root()
-DEFAULT_MODEL = os.environ.get('OC_DELEGATE_MODEL', delegate.DEFAULT_MODEL)
+# None means "no model pinned": the worker runs on whichever model OpenCode's own configuration
+# selects, and the verification adopts the route that was actually used. Set OC_DELEGATE_MODEL to
+# force a default, or pass model per task.
+DEFAULT_MODEL = os.environ.get('OC_DELEGATE_MODEL') or None
 WATCH_DEFAULT = os.environ.get('OC_DELEGATE_WATCH', '1').lower() not in ('0', 'false', 'no')
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -269,8 +272,10 @@ def spawn(action, task, workspace, model, prompt_file, startup, dispatch_id, ses
     logs = STATE_ROOT / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     args = [sys.executable, str(SKILL_DIR / 'scripts/delegate.py'), action, '--workspace', workspace,
-            '--state-dir', str(STATE_ROOT), '--task', task, '--model', model,
+            '--state-dir', str(STATE_ROOT), '--task', task,
             '--prompt-file', str(prompt_file), '--startup-file', str(startup), '--dispatch-id', dispatch_id]
+    if model:
+        args += ['--model', model]
     if session_id:
         args += ['--session-id', session_id]
     args += list(flags)

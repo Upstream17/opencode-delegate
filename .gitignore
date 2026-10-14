@@ -7,6 +7,10 @@ __pycache__/
 .venv/
 venv/
 
+# Node (the npm launcher wrapper declares no dependencies)
+node_modules/
+package-lock.json
+
 # Runtime state: task records, turn streams, viewer records, logs.
 # Defaults outside the repo, but ignore it when OC_DELEGATE_STATE points here.
 state/

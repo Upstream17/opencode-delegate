@@ -1,6 +1,6 @@
 ---
 name: opencode-delegate
-description: Delegate bounded tasks to the locally installed OpenCode harness running the user's OpenCode Go DeepSeek V4.1 Flash model, via the opencode_delegate MCP tools (oc_run, oc_continue, oc_status, oc_result, ...) or scripts/delegate.py. Use when the user asks to hand work to OpenCode or DeepSeek, to save GPT quota with an open-source worker, or to watch a worker in a TUI window.
+description: Delegate bounded tasks to the locally installed OpenCode harness, via the opencode_delegate MCP tools (oc_run, oc_continue, oc_status, oc_result, ...) or scripts/delegate.py. The worker model is unset by default and follows the user's OpenCode configuration; pin one per task when it matters, e.g. the OpenCode Go DeepSeek V4.1 Flash route, which has a very large quota and accepts images. Use when the user asks to hand work to OpenCode or DeepSeek, to save GPT quota with an open-source worker, or to watch a worker in a TUI window.
 ---
 
 # OpenCode delegation
@@ -43,7 +43,8 @@ updates alone do not wake it. Completion, failure and meaningful activity do. Re
 review evidence after the turn ends. `oc_status` preserves top-level activity aliases and adds the
 executor's heartbeat/process liveness diagnostics. Usage is diagnostic, never a reuse gate.
 
-Env overrides: `OC_DELEGATE_STATE`, `OC_DELEGATE_MODEL`, `OC_DELEGATE_WATCH`,
+Env overrides: `OC_DELEGATE_STATE`, `OC_DELEGATE_MODEL` (unset by default, which leaves the model to
+OpenCode's own configuration), `OC_DELEGATE_WATCH`,
 `OC_DELEGATE_SESSION_WAIT` (viewer readiness wait, default 20 s, capped at 60 s),
 `OC_DELEGATE_LABEL` (session title prefix, default `codex-delegate:`),
 `OC_DELEGATE_PYTHON` / `OC_DELEGATE_SERVER` (probe), `OC_DELEGATE_OPENCODE` (executable override).
@@ -91,7 +92,7 @@ name anyway).
   The `acceptance` field is always `"pending"`, and `oc_continue`'s only gate is `status == "completed"`,
   not that the content was accepted.
 
-**Never gate reuse on context length or cost.** The route has a 1,000,000-token window
+**Never gate reuse on context length or cost.** The recommended route has a 1,000,000-token window
 (`opencode-go/deepseek-v4.1-flash`); typical sessions measure ~5k tokens, and a new session is always an
 acceptable choice.
 
@@ -107,9 +108,12 @@ worker's model destination, so the user decides whether a prior session is appro
 
 ## Dispatch
 
-- Default model `opencode-go/deepseek-v4.1-flash`, always passed explicitly - chosen for its very large
-  quota allowance and because it accepts images. Never silently substitute a model; a user-requested
-  alternative goes via `--model`.
+- **No model is pinned by default.** With no `model`, the worker runs on whichever model OpenCode's own
+  configuration selects, and the turn records the route it actually used (`verification.status` is
+  `adopted`, with the provider/model alongside it). Pass `model` to pin one - recommended:
+  `opencode-go/deepseek-v4.1-flash`, which carries a very large quota, a 1M-token context window and
+  image input. A pinned task keeps its route: `continue`/`recover` inherit it and a different model is
+  rejected. Never silently substitute a model the parent or user did not ask for.
 - One worker by default, with a small bounded assignment; extra delegation needs the user's request or
   applicable project instructions. No recursive delegation, no `--auto`.
 - Brief the worker with: objective, absolute workspace, allowed changes, constraints, expected evidence.

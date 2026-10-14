@@ -24,7 +24,10 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
-DEFAULT_MODEL = "opencode-go/deepseek-v4.1-flash"
+# Recommended route (very large quota, 1M-token context, accepts images). Never applied
+# implicitly: an omitted --model means "run on whichever model OpenCode's own configuration
+# selects", and the turn verification then adopts the route the session actually used.
+RECOMMENDED_MODEL = "opencode-go/deepseek-v4.1-flash"
 # Stable, greppable session label. Any session — including a later worker looking for context —
 # can map a task name to its OpenCode session with `session list | grep codex-delegate:<task>`.
 # The default is kept for compatibility with existing installs; OC_DELEGATE_LABEL rebrands it for
@@ -413,8 +416,13 @@ def run_blocking(command: list, cwd: str, timeout: float) -> tuple:
         return -1, expired.stdout or "", expired.stderr or "", True
 
 
-def verify_model(prefix: list, backend: dict, session_id: str, workspace: str, requested: str) -> tuple:
-    """Verify the recorded route with a fresh export; returns (verification, verified_model)."""
+def verify_model(prefix: list, backend: dict, session_id: str, workspace: str,
+                 requested: Optional[str]) -> tuple:
+    """Verify the recorded route with a fresh export; returns (verification, verified_model).
+
+    With a requested route this asserts the export matches it. Without one it adopts the single
+    route the session actually used, so a run on OpenCode's own default is still evidenced.
+    """
     command = prefix + ["session", "export"] + backend_flags(backend) + [session_id]
     code, output, error, timed_out = run_blocking(command, workspace, 60)
     if timed_out:
@@ -428,17 +436,28 @@ def verify_model(prefix: list, backend: dict, session_id: str, workspace: str, r
     if not isinstance(data, dict):
         return {"status": "error", "message": "export was not a JSON object"}, None
     routes = [message["model"] for message in data.get("messages", []) if message.get("model")]
-    expected_provider, _, rest = requested.partition("/")
-    expected_model, _, expected_variant = rest.partition("#")
-    mismatch = not routes or any(
-        route.get("id") != expected_model
-        or route.get("providerID") != expected_provider
-        or (expected_variant and route.get("variant") != expected_variant)
-        for route in routes)
-    if mismatch:
-        sample = [{"providerID": route.get("providerID"), "id": route.get("id")} for route in routes[:3]]
-        return {"status": "mismatch", "expected": requested, "sample": sample}, None
-    return {"status": "verified", "expected": requested, "routes": len(routes)}, routes[-1]
+    sample = [{"providerID": route.get("providerID"), "id": route.get("id")} for route in routes[:3]]
+    if requested:
+        expected_provider, _, rest = requested.partition("/")
+        expected_model, _, expected_variant = rest.partition("#")
+        mismatch = not routes or any(
+            route.get("id") != expected_model
+            or route.get("providerID") != expected_provider
+            or (expected_variant and route.get("variant") != expected_variant)
+            for route in routes)
+        if mismatch:
+            return {"status": "mismatch", "expected": requested, "sample": sample}, None
+        return {"status": "verified", "expected": requested, "routes": len(routes)}, routes[-1]
+    # No model was requested: adopt the route OpenCode selected instead of asserting one.
+    if not routes:
+        return {"status": "unverifiable", "expected": None,
+                "message": "export recorded no model route"}, None
+    if len({(route.get("providerID"), route.get("id"), route.get("variant")) for route in routes}) > 1:
+        return {"status": "inconsistent", "expected": None, "sample": sample}, None
+    adopted = routes[-1]
+    return {"status": "adopted", "expected": None, "routes": len(routes),
+            "providerID": adopted.get("providerID"), "id": adopted.get("id"),
+            "variant": adopted.get("variant")}, adopted
 
 
 def validate_task(task: str) -> None:
@@ -621,7 +640,9 @@ def execute_turn(record: dict, store: StateStore, args: argparse.Namespace, work
     def on_tick(elapsed: float) -> None:
         store.update(heartbeat_at=utc_now(), elapsed_seconds=round(elapsed, 1))
 
-    command = prefix + ["run"] + backend_flags(backend) + ["--format", "json", "--model", args.model]
+    command = prefix + ["run"] + backend_flags(backend) + ["--format", "json"]
+    if args.model:
+        command += ["--model", args.model]
     if expected_session_id:
         command += ["--session", expected_session_id]
     if args.action == "run":
@@ -666,7 +687,7 @@ def execute_turn(record: dict, store: StateStore, args: argparse.Namespace, work
     if not stats["last_text"]:
         return _report(store, "worker produced no final text", exit_code, backend)
     verification, verified_model = verify_model(prefix, backend, record["session_id"], str(workspace), args.model)
-    if verification["status"] != "verified":
+    if verification["status"] not in ("verified", "adopted"):
         return _report(store, f"model verification {verification['status']}", exit_code, backend,
                        verification=verification)
     finalize(store, "completed", verification=verification, verified_model=verified_model,
@@ -740,6 +761,10 @@ def run_task(args: argparse.Namespace) -> int:
             if not state_path.exists():
                 raise ValueError("No task state found; use run for a new task")
             record = load_record(state_path)
+            if args.model is None:
+                # Inherit the route the task was created with, so only a deliberate change of model
+                # is rejected. A task created without a pinned model stays unpinned.
+                args.model = record.get("model")
             _validate_continuation(record, args, workspace, sync_backend)
         turn = record.get("turn", 0) + 1
         begin_turn(record, turn)
@@ -863,7 +888,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--task", required=True)
     parser.add_argument("--prompt-file")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model",
+                        help="Worker model route, e.g. " + RECOMMENDED_MODEL +
+                             ". Omit to let OpenCode use its own configured default.")
     parser.add_argument("--opencode")
     parser.add_argument("--startup-file", help=argparse.SUPPRESS)
     parser.add_argument("--dispatch-id", help=argparse.SUPPRESS)
