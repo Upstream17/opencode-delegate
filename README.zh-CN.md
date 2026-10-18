@@ -5,7 +5,7 @@
 
 这是一个标准 stdio MCP 服务（底下是一层很薄的 Python CLI），任何 MCP 客户端都能直接调用：Codex、
 Claude Code、Claude Desktop、Cursor、Cline、Continue、Zed、Windsurf。主智能体负责写派单、跟踪进度、
-审证据；子智能体用自己的额度干活。
+审证据并承担方案设计与最终判断；子智能体用自己的额度执行明确任务。
 
 [English](README.md)
 
@@ -16,6 +16,16 @@ Claude Code、Claude Desktop、Cursor、Cline、Continue、Zed、Windsurf。主�
 你选择的服务，不由本工具保证。
 
 本工具不绑定任何模型品牌。默认跟随 OpenCode 的配置，也允许父代理为每个任务指定模型。
+
+## 委派职责边界
+
+主智能体负责方案设计和最终判断。默认只把事实查询、按已确定方案编码、执行测试交给子智能体，
+子智能体可以自行处理常规编码细节。架构、研究假设和算法选择由主智能体确定；只有用户明确要求
+子智能体提供方案建议时才委派这类咨询。遇到影响算法或模型的未定义决策，先报告缺口，暂停依赖它的实现。
+
+派单前写清交付物、已确定规则、输入、允许改动、验收证据和预算／停止条件；超出执行时限的工作拆开。
+不能为完成局部验证而删去设计约束，也不能把测试通过当作设计成功。具体的派单前检查和每次任务必须
+携带的子智能体边界说明，见 [SKILL 的委派契约](SKILL.md#delegation-contract-parent-designs-worker-executes)。
 
 ## 前置要求
 

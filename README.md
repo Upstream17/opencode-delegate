@@ -5,7 +5,7 @@ premium subscription quota is spent on scoping, reviewing and deciding instead o
 
 One stdio MCP server (plus a thin Python CLI underneath it) that any MCP client can drive: Codex,
 Claude Code, Claude Desktop, Cursor, Cline, Continue, Zed, Windsurf. The parent agent writes the brief,
-dispatches it, watches progress and reviews the evidence; the worker does the work on its own quota.
+owns the design, dispatches execution, watches progress and reviews the evidence; the worker uses its own quota.
 
 [中文说明](README.zh-CN.md)
 
@@ -18,6 +18,19 @@ Actual allowance, pricing, and capability depend on your provider and are not gu
 
 No model brand is preferred or required. The worker follows your OpenCode configuration by default,
 and the parent can select a model per task.
+
+## Delegation boundary
+
+The parent agent owns the design and final judgment. By default the worker performs factual lookup,
+implements a settled design, and runs tests; it may choose routine coding details. Architecture,
+research assumptions and algorithm selection stay with the parent unless the user explicitly asks
+for worker advice. An unresolved design question must be reported before dependent implementation.
+
+Before dispatch, specify the deliverable, settled rules, inputs, allowed changes, acceptance evidence,
+and budget/stop conditions. Split tasks that cannot fit the execution window. Do not drop a design
+constraint to finish a component check, or equate passing tests with a successful design. See the
+[skill's delegation contract](SKILL.md#delegation-contract-parent-designs-worker-executes) for the
+readiness check and the worker instruction to include in every prompt.
 
 ## Requirements
 
