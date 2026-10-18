@@ -31,6 +31,18 @@ def model_route(requested: str) -> dict:
 def handle_export(argv: list) -> int:
     """Emit a minimal session export document."""
     session_id = argv[-1] if argv else "ses_fake"
+    if os.environ.get("FAKE_MODE") == "bad_export":
+        sys.stdout.write('{"messages":[')
+        sys.stdout.flush()
+        return 0
+    if os.environ.get("FAKE_MODE") == "export_truncated_once":
+        marker = os.environ.get("FAKE_EXPORT_MARKER")
+        if marker and not os.path.exists(marker):
+            with open(marker, "w", encoding="utf-8") as handle:
+                handle.write("first export was truncated")
+            sys.stdout.write('{"info":{"id":')
+            sys.stdout.flush()
+            return 0
     document = {"info": {"id": session_id}, "messages": [{"model": model_route(DEFAULT_MODEL)}]}
     sys.stdout.write(json.dumps(document))
     sys.stdout.flush()

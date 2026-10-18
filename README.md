@@ -174,6 +174,9 @@ The `oc_run` response's `model_source` identifies the source. Pinned routes are 
 exported evidence; completely unpinned runs `adopt` a valid recorded route (`status: adopted`).
 Missing, inconsistent, or mismatched routes require review. A provider/authentication error should
 prompt checks of the actual route, credentials and access; a 403 does not prove the default is absent.
+If the shared service returns a structurally incomplete export just after a run, the helper retries
+the export up to three times with short backoff. It still requires valid route evidence before
+reporting completion; timeouts and semantic route mismatches are not retried or waived.
 The tool never silently switches providers or changes OpenCode settings. `provider/model-name` is
 only a format placeholder, not an installable model ID.
 

@@ -166,6 +166,29 @@ class DelegateTest(unittest.TestCase):
         run_calls = [entry for entry in self.argv_log() if entry and entry[0] == "run"]
         self.assertNotIn("--model", run_calls[-1], "an unpinned run must not force a model")
 
+    def test_truncated_export_is_retried_before_marking_needs_review(self):
+        marker = self.base / "export-once.marker"
+        result = self.run_delegate(
+            "--model", MODEL, task="retry-export",
+            env={"FAKE_MODE": "export_truncated_once", "FAKE_EXPORT_MARKER": str(marker)},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = read_json(self.state / "retry-export.json")
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(record["verification"]["status"], "verified")
+        self.assertEqual(record["verification"]["export_attempts"], 2)
+        exports = [entry for entry in self.argv_log() if entry[:2] == ["session", "export"]]
+        self.assertEqual(len(exports), 2)
+
+    def test_persistently_truncated_export_still_requires_review(self):
+        result = self.run_delegate("--model", MODEL, task="bad-export",
+                                  env={"FAKE_MODE": "bad_export"})
+        self.assertNotEqual(result.returncode, 0)
+        record = read_json(self.state / "bad-export.json")
+        self.assertEqual(record["status"], "needs_review")
+        self.assertEqual(record["verification"]["status"], "error")
+        self.assertEqual(record["verification"]["export_attempts"], 4)
+
     def test_continuation_clears_stale_verification(self):
         first = self.run_delegate("--model", MODEL, task="cont")
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -259,6 +282,7 @@ class DelegateTest(unittest.TestCase):
         self.assertEqual(record["backend"], {"kind": "service", "server": None})
         export_calls = [entry for entry in self.argv_log() if entry[:2] == ["session", "export"]]
         self.assertTrue(export_calls)
+        self.assertIn("--sanitize", export_calls[0])
         self.assertNotIn("--standalone", export_calls[0])
         self.assertNotIn("--server", export_calls[0])
 

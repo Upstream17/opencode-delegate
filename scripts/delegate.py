@@ -40,6 +40,10 @@ HEARTBEAT_INTERVAL = 2.0
 STATUS_SUMMARY_LIMIT = 160
 FINAL_TEXT_LIMIT = 20000
 DEFAULT_STALE_SECONDS = 60.0
+# OpenCode's shared service can briefly return a truncated session export just after a worker
+# exits. Retry only structurally incomplete exports; never waive a semantic route mismatch.
+MODEL_EXPORT_ATTEMPTS = 4
+MODEL_EXPORT_RETRY_DELAY = 0.5
 KNOWN_BACKENDS = ("service", "server", "standalone")
 # The worker runs detached, so it has no console to inherit. Without this flag every console
 # child (the OpenCode CLI, its short helper calls, taskkill) is handed a fresh visible console
@@ -448,26 +452,55 @@ def verify_model(prefix: list, backend: dict, session_id: str, workspace: str,
     With a requested route this asserts the export matches it. Without one it adopts the single
     route the session actually used, so a run on OpenCode's own default is still evidenced.
     """
-    command = prefix + ["session", "export"] + backend_flags(backend) + [session_id]
-    code, output, error, timed_out = run_blocking(command, workspace, 60)
-    if timed_out:
-        return {"status": "error", "message": "export timed out"}, None
-    if code != 0:
-        return {"status": "error", "message": bound(error[-400:])}, None
-    try:
-        data = json.loads(output)
-    except json.JSONDecodeError as exc:
-        return {"status": "error", "message": f"export was not JSON: {exc}"}, None
-    if not isinstance(data, dict):
-        return {"status": "error", "message": "export was not a JSON object"}, None
-    messages = data.get('messages')
-    if not isinstance(messages, list) or any(not isinstance(message, dict) for message in messages):
-        return {'status': 'unverifiable', 'message': 'export messages were malformed'}, None
+    # The model route is small metadata, but sanitized exports may still be large. The service
+    # occasionally truncates an export during session finalization; retry structural failures
+    # briefly and require a complete, parseable export before accepting any route evidence.
+    command = prefix + ["session", "export", "--sanitize"] + backend_flags(backend) + [session_id]
+    data = None
+    retry_reason = None
+    attempts = 0
+    for attempts in range(1, MODEL_EXPORT_ATTEMPTS + 1):
+        code, output, error, timed_out = run_blocking(command, workspace, 60)
+        if timed_out:
+            retry_reason = ("error", "export timed out")
+            break
+        if code != 0:
+            retry_reason = ("error", bound(error[-400:]) or f"export exited with code {code}")
+            break
+        try:
+            candidate = json.loads(output)
+        except json.JSONDecodeError as exc:
+            retry_reason = ("error", f"export was not JSON: {exc}")
+        else:
+            if not isinstance(candidate, dict):
+                retry_reason = ("error", "export was not a JSON object")
+            else:
+                candidate_messages = candidate.get("messages")
+                if (not isinstance(candidate_messages, list)
+                        or any(not isinstance(message, dict) for message in candidate_messages)):
+                    retry_reason = ("unverifiable", "export messages were malformed")
+                else:
+                    candidate_routes = [message["model"] for message in candidate_messages
+                                        if message.get("model") is not None]
+                    if any(not isinstance(route, dict) or any(
+                            not isinstance(route.get(key), str) or not route[key].strip()
+                            for key in ("providerID", "id")) for route in candidate_routes):
+                        retry_reason = ("unverifiable", "export recorded an incomplete model route")
+                    elif not candidate_routes:
+                        retry_reason = ("unverifiable", "export recorded no model route")
+                    else:
+                        data = candidate
+                        break
+        if attempts < MODEL_EXPORT_ATTEMPTS:
+            time.sleep(MODEL_EXPORT_RETRY_DELAY * attempts)
+
+    if data is None:
+        status, message = retry_reason or ("error", "model route export unavailable")
+        return {"status": status, "message": f"{message} after {attempts} export attempts",
+                "export_attempts": attempts}, None
+
+    messages = data["messages"]
     routes = [message['model'] for message in messages if message.get('model') is not None]
-    if any(not isinstance(route, dict) or any(
-            not isinstance(route.get(key), str) or not route[key].strip()
-            for key in ('providerID', 'id')) for route in routes):
-        return {'status': 'unverifiable', 'message': 'export recorded an incomplete model route'}, None
     sample = [{"providerID": route.get("providerID"), "id": route.get("id")} for route in routes[:3]]
     if requested:
         expected_provider, _, rest = requested.partition("/")
@@ -478,18 +511,21 @@ def verify_model(prefix: list, backend: dict, session_id: str, workspace: str,
             or (expected_variant and route.get("variant") != expected_variant)
             for route in routes)
         if mismatch:
-            return {"status": "mismatch", "expected": requested, "sample": sample}, None
-        return {"status": "verified", "expected": requested, "routes": len(routes)}, routes[-1]
+            return {"status": "mismatch", "expected": requested, "sample": sample,
+                    "export_attempts": attempts}, None
+        return {"status": "verified", "expected": requested, "routes": len(routes),
+                "export_attempts": attempts}, routes[-1]
     # No model was requested: adopt the route OpenCode selected instead of asserting one.
     if not routes:
         return {"status": "unverifiable", "expected": None,
                 "message": "export recorded no model route"}, None
     if len({(route.get("providerID"), route.get("id"), route.get("variant")) for route in routes}) > 1:
-        return {"status": "inconsistent", "expected": None, "sample": sample}, None
+        return {"status": "inconsistent", "expected": None, "sample": sample,
+                "export_attempts": attempts}, None
     adopted = routes[-1]
     return {"status": "adopted", "expected": None, "routes": len(routes),
             "providerID": adopted.get("providerID"), "id": adopted.get("id"),
-            "variant": adopted.get("variant")}, adopted
+            "variant": adopted.get("variant"), "export_attempts": attempts}, adopted
 
 
 def validate_task(task: str) -> None:
