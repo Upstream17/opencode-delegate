@@ -184,6 +184,26 @@ oc_continue{task: "fix-flaky-test", prompt: "<返工要求>"}          # 只用�
 | `OC_DELEGATE_OPENCODE` | 自动探测 | 覆盖 OpenCode 可执行文件路径。 |
 | `OC_DELEGATE_PYTHON` | 自动探测 | npm 启动器使用的 Python 3.9+ 解释器；探针也会使用。 |
 | `OC_DELEGATE_SERVER` | 本目录 | 仅供 `mcp_probe.py` 覆盖服务脚本路径。 |
+| `OC_DELEGATE_TIMEOUT` | `0` | 轮次的默认墙钟硬上限（秒）。`0` 表示不设上限。 |
+| `OC_DELEGATE_STALL_TIMEOUT` | `180` | 无任何输出**且**无 CPU 活动多少秒后判定为 `stalled` 并终止。 |
+
+## 时间预算
+
+仍在产出输出的子智能体不会被切断。`--timeout` 默认 `0`（不设上限），长任务会一直跑到自然结束；
+只有无人值守的调用方需要硬上限时才显式传 `--timeout N`。真正负责终止的是卡死看门狗
+`--stall-timeout`（默认 180 秒），它要求**同时**满足两个条件：该时长内无任何输出，**并且**进程树已
+停止消耗 CPU。
+
+仅凭"静默"永远不会被判为卡死。真实任务在算例运行期间可能几分钟没有任何事件 —— 参考负载里就有一个
+`completed` 轮次出现 304 秒的事件间隔。区分"长算例"和"挂住的 provider 调用"的，正是 CPU 活性检查：
+后者既静默又完全空闲。
+
+被切断的轮次标记为 `needs_review`，并把 `termination` 写成 `stalled` 或 `timeout`（显式上限），同时
+记录 `silent_seconds`，父代理据此就能分辨"服务卡住"和"只是需要更多时间"，再决定是否 `oc_recover`。
+记录里还会用 `limits` 保存当次生效的预算。
+
+已知限制：某个工具在完全不占 CPU 的情况下合法阻塞超过 `--stall-timeout`（`Start-Sleep`、被限速的下载）
+时，从外部看与挂死无法区分。这类负载请调高 `OC_DELEGATE_STALL_TIMEOUT`。
 
 ## 支持矩阵
 

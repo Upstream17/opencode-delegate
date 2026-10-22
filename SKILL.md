@@ -182,8 +182,18 @@ oc_recover  {task, prompt}              -> only after a dead, timed-out or inter
 
 The helper streams worker JSONL/stderr to `<task>.turn-<n>.jsonl` / `.stderr.log` and keeps an atomic
 `<task>.json` with session id, current event/tool, `heartbeat_at`, `last_event_at`, pids and elapsed
-seconds (heartbeat proves the wrapper is alive, not that the model is advancing). `--timeout` defaults to
-600 s. State files live at the state-dir root, not under `tasks/<task>/`.
+seconds (heartbeat proves the wrapper is alive, not that the model is advancing). State files live at
+the state-dir root, not under `tasks/<task>/`.
+
+**Time budget: a live worker is never cut short.** `--timeout` defaults to `0`, meaning no wall-clock
+cap at all: a turn that keeps producing output runs until it finishes. Pass an explicit `--timeout N`
+only when an unattended caller needs a hard ceiling. Turns are instead cut by a stall watchdog,
+`--stall-timeout` (default 180 s, `OC_DELEGATE_STALL_TIMEOUT`), which requires **both** no worker
+output for that long **and** a process tree that stopped consuming CPU. Silence alone never kills a
+turn, because a long solver run legitimately emits nothing for minutes. A cut is reported as
+`termination: "stalled"` (or `"timeout"` for an explicit cap) so the parent agent can tell a hung
+service from a task that simply needed more time, and decide whether to `oc_recover`. This means
+`heartbeat_at` advancing proves nothing: read `last_event_at` / `silent_seconds` for real progress.
 
 ## Status, recovery, backends
 
@@ -202,9 +212,10 @@ status` prints the shared service URL (e.g. http://127.0.0.1:49374); the CLI equ
 - Backends: default shared background service; `--server http://127.0.0.1:<port>` for an explicit
   loopback endpoint; `--standalone` for a private per-call server (`--server`/`--standalone` are mutually
   exclusive). Records store the backend, and `continue`/`recover` refuse a change.
-- A timeout or Ctrl+C terminates the process tree, marks the turn `needs_review`, keeps existing
+- A stall or Ctrl+C terminates the process tree, marks the turn `needs_review`, keeps existing
   evidence, and on service/server backends sets `server_session_may_be_running` (inspect the Web UI
-  before retrying). The helper never opens public listeners or tunnels.
+  before retrying). A turn cut by an explicit `--timeout` is reported as `timeout`; one cut by the
+  stall watchdog is reported as `stalled`. The helper never opens public listeners or tunnels.
 
 ## Evidence and acceptance
 

@@ -8,10 +8,16 @@ Extra detail for the `opencode-delegate` helper. Keep it local; it contains no c
 - `session_id` (authoritative; set only once for a new run and never overwritten), `turn`, `status`
   (`running` | `completed` | `needs_review`), `acceptance` (`pending` until the parent decides)
 - Live fields, cleared at the start of each turn: `heartbeat_at` (wrapper alive), `last_event_at`
-  (activity received), `observed_session_id` (diagnostic id seen in the stream), `current_event`,
-  `last_tool`, `event_count`, `stderr_bytes`, `wrapper_pid`, `child_pid`, `elapsed_seconds`,
-  `events_path`, `stderr_path`, `exit_code`, `text`, `error`, `verification`, `verified_model`,
-  `needs_review`, `event_errors`, `parse_errors`, `interrupted`, `server_session_may_be_running`.
+  (activity received), `silent_seconds` (age of `last_event_at`; the real progress signal, since
+  `heartbeat_at` only proves the wrapper is alive), `observed_session_id` (diagnostic id seen in the
+  stream), `current_event`, `last_tool`, `event_count`, `stderr_bytes`, `wrapper_pid`, `child_pid`,
+  `elapsed_seconds`, `events_path`, `stderr_path`, `exit_code`, `text`, `error`, `verification`,
+  `verified_model`, `needs_review`, `event_errors`, `parse_errors`, `interrupted`,
+  `server_session_may_be_running`.
+- `termination` (`completed` | `stalled` | `timeout`) is how the harness ended the worker process, and
+  is independent of `status`: a worker that exits non-zero on its own is `termination: completed` with
+  `status: needs_review`. `limits` (`timeout`, `stall_timeout`) records the budget in force for the
+  turn, so a record explains its own outcome without the original command line.
 - `turns`: compact summaries of finished turns (`status`, bounded last text, `error`,
   `verified_model`, `verification`, `exit_code`, `acceptance`, `interrupted`,
   `server_session_may_be_running`, evidence paths). Previous-turn evidence is retained here; live
@@ -30,9 +36,16 @@ credentials. Only the last text event is kept as the final result (bounded); ful
   text event and no `step_finish(stop)`; no stop event is required.
 - `completed` means harness + model verification only, never that tests passed. `acceptance` stays
   `pending`.
-- Any timeout, Ctrl+C, non-zero exit, error event, session mismatch/mix, unparseable line, missing
-  session/text, or verification mismatch produces `needs_review` and preserves evidence. A process
-  exit code alone is never treated as proof that tests passed.
+- Any stall, explicit timeout, Ctrl+C, non-zero exit, error event, session mismatch/mix, unparseable
+  line, missing session/text, or verification mismatch produces `needs_review` and preserves evidence.
+  A process exit code alone is never treated as proof that tests passed.
+- A turn cut by the harness records `termination` (`stalled` or `timeout`; `completed` when the worker
+  ended on its own) and `silent_seconds`. A parent agent must distinguish these: `timeout` means an
+  explicit `--timeout` cap was reached, `stalled` means the worker produced nothing and used no CPU.
+  `limits` records the `timeout` / `stall_timeout` in force, so the same record explains why it ended.
+  Silence alone is never a stall: the stall watchdog also requires the process tree to be CPU-idle,
+  because long solver runs emit nothing for minutes (a `completed` turn in the reference workload
+  showed a 304 s gap in its own event stream).
 - A reader/callback failure is surfaced as a `needs_review` turn; the child tree is terminated and
   reaped on any post-spawn exception.
 - Export verification retries only *structural* failures — `json.JSONDecodeError`, a non-object
@@ -65,10 +78,10 @@ credentials. Only the last text event is kept as the final result (bounded); ful
 - `recover` clears a lock only when the owner is confirmed dead and no recorded child/wrapper is
   alive; an unverifiable legacy lock fails closed unless the record's processes are confirmed gone.
 - `recover` requires `--acknowledge-inspected` plus, for the default shared service or `--server`
-  backend, `--acknowledge-session-idle` (operator/parent confirms the server session is idle — killing
+  backend, `--acknowledge-session-idle` (operator/parent confirms the server session is idle 鈥?killing
   this client does not stop it). A live residual child/wrapper process blocks recovery on ALL
   backends, including `--standalone`. It resumes the same session; no automatic retry exists.
-- Error/timeout/Ctrl+C on a service/server backend sets `server_session_may_be_running`. Inspect the
+- Error/stall/explicit-timeout/Ctrl+C on a service/server backend sets `server_session_may_be_running`. Inspect the
   session via the Web UI before retrying; the helper does not claim it stopped.
 
 ## MCP orchestration and viewer bridge (0.4.0)

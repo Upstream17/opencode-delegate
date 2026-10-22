@@ -40,6 +40,14 @@ HEARTBEAT_INTERVAL = 2.0
 STATUS_SUMMARY_LIMIT = 160
 FINAL_TEXT_LIMIT = 20000
 DEFAULT_STALE_SECONDS = 60.0
+# A worker that keeps producing output is alive and owns its own time budget: 0 means no
+# wall-clock cap at all. Only an explicit --timeout (or OC_DELEGATE_TIMEOUT) may cut a turn,
+# so a slow but productive long task is never killed for taking too long.
+DEFAULT_TIMEOUT_SECONDS = 0.0
+# Silence alone is not evidence of death: real turns emit nothing for minutes while a solver
+# runs (gaps over 300s have been observed in successful turns). A stall therefore needs BOTH no
+# output for this many seconds AND a process tree that stopped consuming CPU.
+DEFAULT_STALL_SECONDS = 180.0
 # OpenCode's shared service can briefly return a truncated session export just after a worker
 # exits. Retry only structurally incomplete exports; never waive a semantic route mismatch.
 MODEL_EXPORT_ATTEMPTS = 4
@@ -277,6 +285,179 @@ def join_thread(thread: threading.Thread, timeout: float = 15) -> None:
         thread.join(timeout)
 
 
+def _windows_tree_cpu_seconds(pid: int) -> Optional[float]:
+    """Sum CPU seconds across one Windows process tree, or None when it cannot be measured."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return None
+    TH32CS_SNAPPROCESS = 0x00000002
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_void_p),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if not snapshot or snapshot == INVALID_HANDLE_VALUE:
+            return None
+        parents: dict = {}
+        try:
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+            more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while more:
+                parents[entry.th32ProcessID] = entry.th32ParentProcessID
+                more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(snapshot)
+        tree = {pid}
+        frontier = [pid]
+        while frontier:
+            current = frontier.pop()
+            for child, parent in parents.items():
+                if parent == current and child not in tree:
+                    tree.add(child)
+                    frontier.append(child)
+        total = 0.0
+        measured = False
+        for member in tree:
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, member)
+            if not handle:
+                continue
+            try:
+                created = wintypes.FILETIME()
+                exited = wintypes.FILETIME()
+                kernel = wintypes.FILETIME()
+                user = wintypes.FILETIME()
+                if kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                            ctypes.byref(kernel), ctypes.byref(user)):
+                    for value in (kernel, user):
+                        total += (value.dwHighDateTime << 32 | value.dwLowDateTime) / 1e7
+                    measured = True
+            finally:
+                kernel32.CloseHandle(handle)
+        return total if measured else None
+    except Exception:
+        return None
+
+
+def _posix_tree_cpu_seconds(pid: int) -> Optional[float]:
+    """Sum CPU seconds across one Linux process tree, or None when /proc is unavailable."""
+    try:
+        ticks = float(os.sysconf("SC_CLK_TCK"))
+        names = os.listdir("/proc")
+    except (AttributeError, ValueError, OSError):
+        return None
+    parents: dict = {}
+    cputime: dict = {}
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            fields = Path("/proc", name, "stat").read_text(encoding="utf-8", errors="replace")
+            fields = fields.rsplit(")", 1)[1].split()
+            parents[int(name)] = int(fields[1])
+            cputime[int(name)] = (int(fields[11]) + int(fields[12])) / ticks
+        except (OSError, IndexError, ValueError):
+            continue
+    tree = {pid}
+    frontier = [pid]
+    while frontier:
+        current = frontier.pop()
+        for child, parent in parents.items():
+            if parent == current and child not in tree:
+                tree.add(child)
+                frontier.append(child)
+    measured = [member for member in tree if member in cputime]
+    if not measured:
+        return None
+    return sum(cputime[member] for member in measured)
+
+
+def _parse_ps_cputime(token: str) -> Optional[float]:
+    """Convert a ps(1) cputime token (M:SS.hh or H:MM:SS.hh) to seconds."""
+    try:
+        total = 0.0
+        for piece in token.split(":"):
+            total = total * 60.0 + float(piece)
+        return total
+    except ValueError:
+        return None
+
+
+def _ps_tree_cpu_from_output(output: str, pid: int) -> Optional[float]:
+    """Sum CPU seconds for one process tree from `ps -axo pid=,ppid=,cputime=` output."""
+    parents: dict = {}
+    cputime: dict = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            child, parent = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        parents[child] = parent
+        value = _parse_ps_cputime(parts[2])
+        if value is not None:
+            cputime[child] = value
+    tree = {pid}
+    frontier = [pid]
+    while frontier:
+        current = frontier.pop()
+        for child, parent in parents.items():
+            if parent == current and child not in tree:
+                tree.add(child)
+                frontier.append(child)
+    measured = [member for member in tree if member in cputime]
+    if not measured:
+        return None
+    return sum(cputime[member] for member in measured)
+
+
+def _ps_tree_cpu_seconds(pid: int) -> Optional[float]:
+    """Sum CPU seconds across a process tree using ps(1), for platforms without /proc."""
+    try:
+        completed = subprocess.run(["ps", "-axo", "pid=,ppid=,cputime="],
+                                   capture_output=True, encoding="utf-8", errors="replace",
+                                   timeout=15, creationflags=NO_WINDOW)
+    except Exception:
+        return None
+    if completed.returncode != 0:
+        return None
+    return _ps_tree_cpu_from_output(completed.stdout or "", pid)
+
+
+def tree_cpu_seconds(pid: int) -> Optional[float]:
+    """Total CPU seconds used by a process tree, or None when this platform cannot report it."""
+    if not pid or not pid_alive(pid):
+        return None
+    if os.name == "nt":
+        return _windows_tree_cpu_seconds(pid)
+    if sys.platform.startswith("linux"):
+        return _posix_tree_cpu_seconds(pid)
+    return _ps_tree_cpu_seconds(pid)
+
+
+def _env_float(name: str, fallback: float) -> float:
+    """Read a float from the environment, falling back on anything unparseable."""
+    raw = os.environ.get(name)
+    if not raw:
+        return fallback
+    try:
+        return float(raw)
+    except ValueError:
+        return fallback
+
+
 class StreamRunner:
     """Run a child process while pumping stdout/stderr lines and heartbeats to callbacks.
 
@@ -288,10 +469,17 @@ class StreamRunner:
                  on_start: Callable[[int], None],
                  on_stdout_line: Callable[[str], None],
                  on_stderr_line: Callable[[str], None],
-                 on_tick: Callable[[float], None]):
+                 on_tick: Callable[[float], None],
+                 stall_timeout: float = DEFAULT_STALL_SECONDS,
+                 cpu_probe: Optional[Callable[[int], Optional[float]]] = None):
         self.command = command
         self.cwd = cwd
         self.timeout = timeout
+        self.stall_timeout = stall_timeout
+        self.cpu_probe = cpu_probe or tree_cpu_seconds
+        self.last_output_at = time.monotonic()
+        self.silent_seconds = 0.0
+        self._cpu_baseline: Optional[float] = None
         self.on_start = on_start
         self.on_stdout_line = on_stdout_line
         self.on_stderr_line = on_stderr_line
@@ -302,6 +490,8 @@ class StreamRunner:
     def _pump(self, stream, callback: Callable[[str], None]) -> None:
         try:
             for line in iter(stream.readline, ""):
+                # Any output, on either stream, proves the worker is still alive.
+                self.last_output_at = time.monotonic()
                 try:
                     callback(line)
                 except Exception as exc:
@@ -314,6 +504,38 @@ class StreamRunner:
             except Exception:
                 pass
 
+    def _cpu_advanced(self) -> bool:
+        """True when the worker process tree consumed CPU since the previous sample.
+
+        An unavailable probe fails open (reports progress), so a platform that cannot measure
+        CPU can never have legitimate long work killed; `--timeout` remains the bound there.
+        """
+        sample = self.cpu_probe(self.child_pid) if self.child_pid else None
+        if sample is None:
+            return True
+        previous = self._cpu_baseline
+        self._cpu_baseline = sample
+        if previous is None:
+            return True
+        return sample > previous + 0.05
+
+    def _termination_reason(self, now: float, started: float) -> Optional[str]:
+        """Decide whether this turn must be cut short, and why.
+
+        A worker that is still producing output is never cut by the wall clock: `timeout` of 0
+        (the default) means no cap at all. Silence only counts as a stall once the process tree
+        has also stopped consuming CPU, because a long tool call emits nothing for minutes.
+        """
+        if self.timeout and now - started > self.timeout:
+            return "timeout"
+        if self.stall_timeout and now - self.last_output_at > self.stall_timeout:
+            if self._cpu_advanced():
+                # Alive but quiet: a long tool call. Grant another full stall window.
+                self.last_output_at = now
+                return None
+            return "stalled"
+        return None
+
     def run(self) -> tuple:
         process = subprocess.Popen(
             self.command, cwd=self.cwd, stdin=subprocess.DEVNULL,
@@ -324,7 +546,7 @@ class StreamRunner:
         self.child_pid = process.pid
         out_thread = threading.Thread(target=self._pump, args=(process.stdout, self.on_stdout_line), daemon=True)
         err_thread = threading.Thread(target=self._pump, args=(process.stderr, self.on_stderr_line), daemon=True)
-        timed_out = False
+        termination = "completed"
         started = time.monotonic()
 
         def shutdown() -> None:
@@ -337,6 +559,8 @@ class StreamRunner:
             self.on_start(process.pid)
             out_thread.start()
             err_thread.start()
+            # Baseline the CPU counter so the first stall probe has a real delta to compare.
+            self._cpu_baseline = self.cpu_probe(process.pid)
             while True:
                 try:
                     process.wait(timeout=HEARTBEAT_INTERVAL)
@@ -346,10 +570,12 @@ class StreamRunner:
                         kill_tree(process)
                         reap(process)
                         break
-                    elapsed = time.monotonic() - started
-                    self.on_tick(elapsed)
-                    if elapsed > self.timeout:
-                        timed_out = True
+                    now = time.monotonic()
+                    self.on_tick(now - started)
+                    reason = self._termination_reason(now, started)
+                    if reason:
+                        termination = reason
+                        self.silent_seconds = now - self.last_output_at
                         kill_tree(process)
                         reap(process)
                         break
@@ -371,7 +597,7 @@ class StreamRunner:
                 kill_tree(process)
             reap(process)
             raise RuntimeError("worker stream failed: " + "; ".join(self.reader_errors[:5]))
-        return process.returncode, timed_out
+        return process.returncode, termination
 
 
 def extract_session_id(event: dict) -> Optional[str]:
@@ -718,7 +944,9 @@ def execute_turn(record: dict, store: StateStore, args: argparse.Namespace, work
         store.update(child_pid=pid)
 
     def on_tick(elapsed: float) -> None:
-        store.update(heartbeat_at=utc_now(), elapsed_seconds=round(elapsed, 1))
+        silent = age_seconds(record.get("last_event_at"))
+        store.update(heartbeat_at=utc_now(), elapsed_seconds=round(elapsed, 1),
+                     silent_seconds=round(silent or 0.0, 1))
 
     command = prefix + ["run"] + backend_flags(backend) + ["--format", "json"]
     if args.model:
@@ -731,9 +959,10 @@ def execute_turn(record: dict, store: StateStore, args: argparse.Namespace, work
         # rename in the TUI is not clobbered.
         command += ["--title", TITLE_PREFIX + args.task]
     command.append(prompt)
-    runner = StreamRunner(command, str(workspace), args.timeout, on_start, on_stdout, on_stderr, on_tick)
+    runner = StreamRunner(command, str(workspace), args.timeout, on_start, on_stdout, on_stderr,
+                          on_tick, stall_timeout=args.stall_timeout)
     try:
-        exit_code, timed_out = runner.run()
+        exit_code, termination = runner.run()
     finally:
         events_file.flush()
         stderr_file.flush()
@@ -744,10 +973,21 @@ def execute_turn(record: dict, store: StateStore, args: argparse.Namespace, work
     store.update(exit_code=exit_code,
                  text=(stats["last_text"] or "")[:FINAL_TEXT_LIMIT],
                  parse_errors=stats["parse_errors"],
-                 observed_session_id=stats["first_session"])
+                 observed_session_id=stats["first_session"],
+                 termination=termination,
+                 silent_seconds=round(runner.silent_seconds, 1))
 
-    if timed_out:
-        return _report(store, "timeout: worker exceeded --timeout and was terminated", exit_code, backend)
+    if termination == "timeout":
+        return _report(store, f"timeout: exceeded explicit --timeout {args.timeout:g}s",
+                       exit_code, backend)
+    if termination == "stalled":
+        snapshot = store.snapshot()
+        return _report(
+            store,
+            f"stalled: no worker output for {runner.silent_seconds:.0f}s and no CPU activity "
+            f"(last event {snapshot.get('current_event') or 'none'}, "
+            f"last tool {snapshot.get('last_tool') or 'none'})",
+            exit_code, backend)
     if stats["parse_errors"]:
         return _report(store, "worker stream contained unparseable lines", exit_code, backend,
                        parse_errors=stats["parse_errors"])
@@ -811,8 +1051,10 @@ def _validate_continuation(record: dict, args: argparse.Namespace, workspace: Pa
 def run_task(args: argparse.Namespace) -> int:
     """Execute run/continue/recover and print a compact result."""
     validate_task(args.task)
-    if args.timeout < 1:
-        raise ValueError("Timeout must be positive")
+    if args.timeout < 0:
+        raise ValueError("Timeout must be 0 (no cap) or positive")
+    if args.stall_timeout <= 0:
+        raise ValueError("Stall timeout must be positive")
     workspace = Path(args.workspace).expanduser().resolve(strict=True)
     if not workspace.is_dir():
         raise ValueError("Workspace must be a directory")
@@ -846,6 +1088,9 @@ def run_task(args: argparse.Namespace) -> int:
                 # is rejected. A task created without a pinned model stays unpinned.
                 args.model = record.get("model")
             _validate_continuation(record, args, workspace, sync_backend)
+        # Record the budget this turn actually ran under, so a later reviewer can tell a deliberate
+        # cap from a stall without reading the command line back out of the logs.
+        record["limits"] = {"timeout": args.timeout, "stall_timeout": args.stall_timeout}
         turn = record.get("turn", 0) + 1
         begin_turn(record, turn)
         store = StateStore(state_path, record)
@@ -976,7 +1221,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dispatch-id", help=argparse.SUPPRESS)
     parser.add_argument("--session-id",
                         help="run only: reserve this session id instead of letting OpenCode mint one")
-    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--timeout", type=float, default=_env_float("OC_DELEGATE_TIMEOUT", DEFAULT_TIMEOUT_SECONDS),
+                        help="Hard wall-clock cap in seconds. 0 (default) means no cap: a worker that "
+                             "keeps producing output is never cut short. OC_DELEGATE_TIMEOUT overrides "
+                             "the default.")
+    parser.add_argument("--stall-timeout", type=float,
+                        default=_env_float("OC_DELEGATE_STALL_TIMEOUT", DEFAULT_STALL_SECONDS),
+                        help="Cut the turn when the worker produced no output for this many seconds AND "
+                             "its process tree stopped using CPU. Silence alone never kills a long run. "
+                             "OC_DELEGATE_STALL_TIMEOUT overrides the default.")
     parser.add_argument("--stale-seconds", type=float, default=DEFAULT_STALE_SECONDS)
     parser.add_argument("--acknowledge-inspected", action="store_true",
                         help="Required for recover: confirms the workspace was inspected after failure")

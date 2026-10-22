@@ -92,6 +92,20 @@ def handle_run() -> int:
         emit(text("working"))
         time.sleep(60)
         return 0
+    if mode == "slow_progress":
+        # Keeps producing output for ~2.4s: a worker that is demonstrably alive.
+        for index in range(6):
+            emit(text(f"progress {index}"))
+            time.sleep(0.4)
+        return 0
+    if mode == "busy_silent":
+        # Burns CPU for ~3s without emitting anything: silent but definitely not stalled.
+        deadline = time.time() + 3.0
+        spins = 0
+        while time.time() < deadline:
+            spins += 1
+        emit(text(f"busy loop finished ({spins})"))
+        return 0
     if mode == "stderr":
         emit(text("ok"))
         sys.stderr.write("warning: synthetic stderr line\n")
