@@ -175,8 +175,14 @@ exported evidence; completely unpinned runs `adopt` a valid recorded route (`sta
 Missing, inconsistent, or mismatched routes require review. A provider/authentication error should
 prompt checks of the actual route, credentials and access; a 403 does not prove the default is absent.
 If the shared service returns a structurally incomplete export just after a run, the helper retries
-the export up to three times with short backoff. It still requires valid route evidence before
-reporting completion; timeouts and semantic route mismatches are not retried or waived.
+the export up to three times with short backoff. "Structurally incomplete" is narrow on purpose: only
+unparseable JSON, a non-object document, or a malformed `messages` list are retried. A route problem —
+an incomplete or absent route, a non-zero export exit, a timeout — is semantic, is not retried, and is
+reported immediately. Retrying those cannot succeed and only adds backoff to a deterministic failure.
+Verification calls `session export --sanitize`, which redacts transcript/file data without touching
+`messages[].model`, so the route evidence survives while the payload is smaller. It still requires
+valid route evidence before reporting completion; timeouts and semantic route mismatches are never
+waived. Tests can zero the backoff with `OC_DELEGATE_EXPORT_RETRY_DELAY=0`.
 The tool never silently switches providers or changes OpenCode settings. `provider/model-name` is
 only a format placeholder, not an installable model ID.
 

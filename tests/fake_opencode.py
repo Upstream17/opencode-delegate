@@ -31,7 +31,23 @@ def model_route(requested: str) -> dict:
 def handle_export(argv: list) -> int:
     """Emit a minimal session export document."""
     session_id = argv[-1] if argv else "ses_fake"
-    if os.environ.get("FAKE_MODE") == "bad_export":
+    mode = os.environ.get("FAKE_MODE")
+    if mode == "export_fail":
+        sys.stderr.write("synthetic export failure\n")
+        sys.stderr.flush()
+        return 2
+    if mode == "export_bad_route":
+        document = {"info": {"id": session_id},
+                    "messages": [{"model": {"providerID": "opencode-go", "id": ""}}]}
+        sys.stdout.write(json.dumps(document))
+        sys.stdout.flush()
+        return 0
+    if mode == "export_no_route":
+        document = {"info": {"id": session_id}, "messages": []}
+        sys.stdout.write(json.dumps(document))
+        sys.stdout.flush()
+        return 0
+    if mode == "bad_export":
         sys.stdout.write('{"messages":[')
         sys.stdout.flush()
         return 0

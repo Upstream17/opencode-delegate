@@ -35,6 +35,15 @@ credentials. Only the last text event is kept as the final result (bounded); ful
   exit code alone is never treated as proof that tests passed.
 - A reader/callback failure is surfaced as a `needs_review` turn; the child tree is terminated and
   reaped on any post-spawn exception.
+- Export verification retries only *structural* failures — `json.JSONDecodeError`, a non-object
+  document, a malformed `messages` list — up to `MODEL_EXPORT_ATTEMPTS` (4) times with linear
+  backoff. Route-level problems (incomplete/absent route) and non-zero exits are semantic: they are
+  reported on the first attempt with their historical statuses, because a complete export does not
+  gain a route by being fetched again. Every verification dict carries `export_attempts`.
+  `OC_DELEGATE_EXPORT_RETRY_DELAY` overrides the 0.5 s backoff unit (tests set `0`). Verification
+  requests `session export --sanitize`; sanitizing redacts transcript and file data but leaves
+  `messages[].model` intact (measured: identical route, 3376 -> 1630 bytes), so a smaller payload
+  cannot cost route evidence.
 
 ## Backends
 

@@ -170,7 +170,8 @@ class DelegateTest(unittest.TestCase):
         marker = self.base / "export-once.marker"
         result = self.run_delegate(
             "--model", MODEL, task="retry-export",
-            env={"FAKE_MODE": "export_truncated_once", "FAKE_EXPORT_MARKER": str(marker)},
+            env={"FAKE_MODE": "export_truncated_once", "FAKE_EXPORT_MARKER": str(marker),
+                 "OC_DELEGATE_EXPORT_RETRY_DELAY": "0"},
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         record = read_json(self.state / "retry-export.json")
@@ -182,12 +183,46 @@ class DelegateTest(unittest.TestCase):
 
     def test_persistently_truncated_export_still_requires_review(self):
         result = self.run_delegate("--model", MODEL, task="bad-export",
-                                  env={"FAKE_MODE": "bad_export"})
+                                  env={"FAKE_MODE": "bad_export",
+                                       "OC_DELEGATE_EXPORT_RETRY_DELAY": "0"})
         self.assertNotEqual(result.returncode, 0)
         record = read_json(self.state / "bad-export.json")
         self.assertEqual(record["status"], "needs_review")
         self.assertEqual(record["verification"]["status"], "error")
         self.assertEqual(record["verification"]["export_attempts"], 4)
+
+    def test_incomplete_route_is_not_retried(self):
+        """A complete, parseable export will not gain a route by being fetched again."""
+        result = self.run_delegate("--model", MODEL, task="bad-route",
+                                  env={"FAKE_MODE": "export_bad_route",
+                                       "OC_DELEGATE_EXPORT_RETRY_DELAY": "0"})
+        self.assertNotEqual(result.returncode, 0)
+        record = read_json(self.state / "bad-route.json")
+        self.assertEqual(record["verification"]["status"], "unverifiable")
+        self.assertEqual(record["verification"]["export_attempts"], 1)
+        exports = [entry for entry in self.argv_log() if entry[:2] == ["session", "export"]]
+        self.assertEqual(len(exports), 1, "a semantic route failure must not be retried")
+
+    def test_missing_route_keeps_mismatch_and_is_not_retried(self):
+        result = self.run_delegate("--model", MODEL, task="no-route",
+                                  env={"FAKE_MODE": "export_no_route",
+                                       "OC_DELEGATE_EXPORT_RETRY_DELAY": "0"})
+        self.assertNotEqual(result.returncode, 0)
+        record = read_json(self.state / "no-route.json")
+        self.assertEqual(record["verification"]["status"], "mismatch")
+        self.assertEqual(record["verification"]["export_attempts"], 1)
+
+    def test_failed_export_is_not_retried(self):
+        """A non-zero export exit is not a truncation symptom and names its own cause."""
+        result = self.run_delegate("--model", MODEL, task="export-fail",
+                                  env={"FAKE_MODE": "export_fail",
+                                       "OC_DELEGATE_EXPORT_RETRY_DELAY": "0"})
+        self.assertNotEqual(result.returncode, 0)
+        record = read_json(self.state / "export-fail.json")
+        self.assertEqual(record["verification"]["status"], "error")
+        self.assertEqual(record["verification"]["export_attempts"], 1)
+        self.assertIn("1 export attempt", record["verification"]["message"])
+        self.assertNotIn("attempts", record["verification"]["message"].split("after ")[1])
 
     def test_continuation_clears_stale_verification(self):
         first = self.run_delegate("--model", MODEL, task="cont")

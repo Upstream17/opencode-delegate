@@ -43,6 +43,24 @@ class ReleaseTest(unittest.TestCase):
                 self.assertEqual(verification['status'], 'unverifiable')
                 self.assertIsNone(model)
 
+    def test_route_problems_are_single_attempt_and_never_sleep(self):
+        """A deterministic route failure must not pay retry backoff.
+
+        These payloads are complete JSON: no number of retries can add a route to them. Retrying
+        them turned this millisecond unit test into an 18 s one (6 shapes x 3 s of backoff).
+        """
+        for route in ({}, {'providerID': 'p', 'id': ''}, 'invalid'):
+            with self.subTest(route=route), \
+                 mock.patch.object(delegate, 'run_blocking',
+                    return_value=(0, json.dumps({'messages': [{'model': route}]}), '', False)) as run, \
+                 mock.patch.object(delegate, 'time') as clock:
+                verification, _ = delegate.verify_model(['fake'], {'kind': 'service'},
+                                                        'ses_fake', str(ROOT), 'p/m')
+                self.assertEqual(verification['status'], 'unverifiable')
+                self.assertEqual(verification['export_attempts'], 1)
+                self.assertEqual(run.call_count, 1, 'route failure was retried')
+                clock.sleep.assert_not_called()
+
     def test_posix_kill_targets_only_owned_process_group(self):
         proc = mock.Mock(pid=999999)
         proc._delegate_process_group = True
