@@ -14,6 +14,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+import delegate
 DELEGATE = ROOT / "scripts" / "delegate.py"
 FAKE = Path(__file__).resolve().parent / "fake_opencode.py"
 # Pin a model whenever a test needs route verification to be observable. With no --model the
@@ -265,7 +267,7 @@ class DelegateTest(unittest.TestCase):
         self.assertEqual(run_calls[0][run_calls[0].index("--session") + 1], record_session)
         # Both flags together: the id is pinned AND the session stays findable by task name,
         # which is what lets a later worker look this session up for context.
-        self.assertEqual(run_calls[0][run_calls[0].index("--title") + 1], "codex-delegate:reserved")
+        self.assertEqual(run_calls[0][run_calls[0].index("--title") + 1], f"{delegate.TITLE_PREFIX}reserved")
 
     def test_continuation_does_not_relabel_the_session(self):
         self.run_delegate(task="label")

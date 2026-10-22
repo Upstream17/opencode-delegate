@@ -30,10 +30,37 @@ from urllib.parse import urlparse
 # selects", and the turn verification then adopts the route the session actually used.
 RECOMMENDED_MODEL = "opencode-go/deepseek-v4.1-flash"
 # Stable, greppable session label. Any session — including a later worker looking for context —
-# can map a task name to its OpenCode session with `session list | grep codex-delegate:<task>`.
-# The default is kept for compatibility with existing installs; OC_DELEGATE_LABEL rebrands it for
-# hosts that are not Codex.
-TITLE_PREFIX = os.environ.get("OC_DELEGATE_LABEL") or "codex-delegate:"
+# can map a task name to its OpenCode session with `session list | grep <prefix><task>`.
+# Dynamically resolves host: Antigravity -> "antigravity:", Codex -> "codex-delegate:",
+# or overridden explicitly via OC_DELEGATE_LABEL.
+def resolve_title_prefix() -> str:
+    override = os.environ.get("OC_DELEGATE_LABEL")
+    if override:
+        return override
+    for k in os.environ:
+        if k.startswith("ANTIGRAVITY_") or k.startswith("AGY_"):
+            return "antigravity:"
+        if k.startswith("CODEX_"):
+            return "codex-delegate:"
+    try:
+        import psutil
+        curr = psutil.Process()
+        for _ in range(6):
+            curr = curr.parent()
+            if not curr:
+                break
+            name = (curr.name() or "").lower()
+            exe = (curr.exe() or "").lower()
+            if "antigravity" in name or "antigravity" in exe or "language_server" in name:
+                return "antigravity:"
+            if "codex" in name or "codex" in exe:
+                return "codex-delegate:"
+    except Exception:
+        pass
+    return "codex-delegate:"
+
+
+TITLE_PREFIX = resolve_title_prefix()
 TASK_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 RESERVED_TASK = re.compile(r"(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])")
 HEARTBEAT_INTERVAL = 2.0

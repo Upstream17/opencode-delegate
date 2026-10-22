@@ -195,5 +195,25 @@ class ToolSchemaTest(unittest.TestCase):
                     self.assertIn(name, props, "required key missing from properties")
 
 
+class TitlePrefixTest(unittest.TestCase):
+    """Test dynamic resolution of session title prefix across host environments."""
+
+    def test_explicit_env_override(self):
+        with mock.patch.dict(os.environ, {"OC_DELEGATE_LABEL": "custom:"}):
+            self.assertEqual(delegate.resolve_title_prefix(), "custom:")
+
+    def test_antigravity_env_detection(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ANTIGRAVITY_") and not k.startswith("AGY_") and k != "OC_DELEGATE_LABEL"}
+        env["ANTIGRAVITY_AGENT"] = "1"
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(delegate.resolve_title_prefix(), "antigravity:")
+
+    def test_codex_env_detection(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ANTIGRAVITY_") and not k.startswith("AGY_") and k != "OC_DELEGATE_LABEL"}
+        env["CODEX_HOME"] = "/tmp/codex"
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(delegate.resolve_title_prefix(), "codex-delegate:")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
