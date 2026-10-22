@@ -198,6 +198,27 @@ only a format placeholder, not an installable model ID.
 | `OC_DELEGATE_OPENCODE` | auto-discovered | Override the OpenCode executable path. |
 | `OC_DELEGATE_PYTHON` | auto-discovered | Python 3.9+ executable for the npm launcher; also used by the probe. |
 | `OC_DELEGATE_SERVER` | this folder | Server script override for `mcp_probe.py` only. |
+| `OC_DELEGATE_TIMEOUT` | `0` | Default hard wall-clock cap in seconds for a turn. `0` means no cap. |
+| `OC_DELEGATE_STALL_TIMEOUT` | `180` | Seconds of no worker output **and** no CPU activity before the turn is cut as `stalled`. |
+
+## Time budget
+
+A worker that is still producing output is never cut short. `--timeout` defaults to `0` (no cap), so a
+long task runs until it finishes; pass an explicit `--timeout N` only when an unattended caller needs a
+ceiling. Turns are cut by a stall watchdog instead, `--stall-timeout` (default 180 s), which requires
+**both** no worker output for that long **and** a process tree that stopped consuming CPU.
+
+Silence alone is never treated as a stall. Real turns legitimately emit nothing for minutes while a
+solver runs: a `completed` turn in the reference workload had a 304 s gap in its own event stream. The
+CPU check is what separates that from a hung provider call, which is silent *and* idle.
+
+A cut turn is marked `needs_review` with `termination` set to `stalled` or `timeout` (an explicit cap),
+plus `silent_seconds`, so a parent agent can tell a hung service from a task that simply needed longer
+and decide whether to `oc_recover`. The record also stores the budget in force under `limits`.
+
+Known limit: a tool that legitimately blocks for longer than `--stall-timeout` while using no CPU —
+`Start-Sleep`, a rate-limited download — looks identical to a hang from the outside. Raise
+`OC_DELEGATE_STALL_TIMEOUT` for workloads like that.
 
 ## Support matrix
 
